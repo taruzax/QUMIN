@@ -12,41 +12,18 @@ import pandas as pd
 
 from lab.core.config import PipelineConfig
 from lab.core.contracts import RunResult
-from lab.quant.metrics import sharpe_evidence_metrics, sharpe_statistics
-
-try:
-    import exchange_calendars as xcals
-except ImportError:  # pragma: no cover - optional fallback is covered through the public function
-    xcals = None
+from lab.quant.metrics import (
+    compound_session_returns,
+    return_convention,
+    sharpe_evidence_metrics,
+    sharpe_statistics,
+    statistical_returns,
+)
 
 try:
     import quantstats as qs
 except ImportError:  # pragma: no cover - optional fallback is covered through the public function
     qs = None
-
-
-def compound_session_returns(
-    timestamps: Any,
-    returns: Any,
-    *,
-    calendar: str = "XNYS",
-) -> pd.Series:
-    """Compound native returns by exchange session without weekend padding."""
-    values = pd.Series(np.asarray(returns, dtype=float), index=pd.to_datetime(timestamps, utc=True))
-    if values.empty:
-        return pd.Series(dtype=float, name="daily_return")
-    try:
-        if xcals is None:
-            raise ImportError("exchange_calendars is not installed")
-        exchange = xcals.get_calendar(calendar)
-        session_dates = []
-        for timestamp in values.index:
-            session = exchange.date_to_session(timestamp.date(), direction="previous")
-            session_dates.append(session)
-        frame = pd.DataFrame({"return": values.to_numpy(), "session": session_dates}, index=values.index)
-    except (ImportError, TypeError, ValueError, KeyError):
-        frame = pd.DataFrame({"return": values.to_numpy(), "session": values.index.normalize()}, index=values.index)
-    return frame.groupby("session")["return"].apply(lambda row: float(np.prod(1.0 + row.to_numpy()) - 1.0)).rename("daily_return")
 
 
 def equity_statistics(returns: Any, *, frequency: str = "daily", min_observations: int = 30) -> dict[str, Any]:
@@ -98,6 +75,7 @@ def generate_local_report(
     timestamps: Any | None = None,
     title: str = "Quant ML Lab report",
     frequency: str = "daily",
+    calendar: str = "XNYS",
     summary_html: str | None = None,
 ) -> Path:
     """Write an offline HTML report from explicit local return series."""
@@ -106,13 +84,29 @@ def generate_local_report(
     net = np.asarray(net_returns, dtype=float).reshape(-1)
     gross = None if gross_returns is None else np.asarray(gross_returns, dtype=float).reshape(-1)
     if timestamps is None:
+        if frequency == "daily":
+            raise ValueError("timestamps are required for daily session-compounded reports")
         index: pd.Index = pd.RangeIndex(len(net), name="observation")
+        statistical_net = pd.Series(net, index=index, name="native_return")
+        statistical_gross = None if gross is None else pd.Series(gross, index=index, name="native_return")
+        quantstats_net = None
     else:
-        index = pd.DatetimeIndex(pd.to_datetime(timestamps, utc=True))
-        if len(index) != len(net):
-            raise ValueError("timestamps and net_returns must have the same length")
-    statistics = equity_statistics(net, frequency=frequency)
-    quantstats_html, quantstats_error = _quantstats_report(net, index, title) if len(net) else (None, "empty return series")
+        statistical_net = statistical_returns(timestamps, net, frequency=frequency, calendar=calendar)
+        statistical_gross = (
+            statistical_returns(timestamps, gross, frequency=frequency, calendar=calendar)
+            if gross is not None else None
+        )
+        index = statistical_net.index
+        # QuantStats uses daily conventions; keep its input independent of the
+        # requested native-bar diagnostic convention.
+        quantstats_net = statistical_returns(timestamps, net, frequency="daily", calendar=calendar)
+    statistics = equity_statistics(statistical_net.to_numpy(), frequency=frequency)
+    if quantstats_net is None:
+        quantstats_html, quantstats_error = None, "timestamps are required for a daily QuantStats report"
+    elif not len(quantstats_net):
+        quantstats_html, quantstats_error = None, "empty return series"
+    else:
+        quantstats_html, quantstats_error = _quantstats_report(quantstats_net.to_numpy(), quantstats_net.index, title)
     if quantstats_html is not None:
         body = quantstats_html
         if summary_html:
@@ -120,7 +114,7 @@ def generate_local_report(
             body = body[:insertion] + summary_html + body[insertion:] if insertion >= 0 else summary_html + body
         output.write_text(body)
         return output
-    gross_summary = equity_statistics(gross, frequency=frequency) if gross is not None else None
+    gross_summary = equity_statistics(statistical_gross.to_numpy(), frequency=frequency) if statistical_gross is not None else None
     fallback_summary = summary_html or ""
     output.write_text(
         "<html><head><meta charset='utf-8'><title>"
@@ -155,9 +149,20 @@ def _metric_rows(metrics: Any) -> str:
     return "".join(rows) or "<tr><td colspan='2'>No predictive metrics were saved.</td></tr>"
 
 
-def _period_summary(label: str, result: RunResult, *, frequency: str, min_observations: int, fees_bps: float, slippage_bps: float) -> dict[str, Any]:
+def _period_summary(
+    label: str,
+    result: RunResult,
+    *,
+    frequency: str,
+    min_observations: int,
+    fees_bps: float,
+    slippage_bps: float,
+    calendar: str | None = None,
+) -> dict[str, Any]:
     backtest = result.backtest
     prediction_count = sum(len(frame.keys) for frame in result.predictions)
+    if calendar is None:
+        calendar = getattr(result.snapshot, "calendar", None) or "XNYS"
     if backtest is None or backtest.net_returns is None:
         return {
             "label": label,
@@ -177,21 +182,26 @@ def _period_summary(label: str, result: RunResult, *, frequency: str, min_observ
     fee_cost = costs * fees_bps / total_cost_bps if total_cost_bps else 0.0
     slippage_cost = costs * slippage_bps / total_cost_bps if total_cost_bps else 0.0
     native_net = equity_statistics(net, frequency="native")
-    session_net = compound_session_returns(timestamps, net)
-    session_summary = equity_statistics(session_net.to_numpy(), frequency=frequency)
+    session_net = statistical_returns(timestamps, net, frequency="daily", calendar=calendar)
+    session_summary = equity_statistics(session_net.to_numpy(), frequency="daily")
     gross_summary = equity_statistics(gross, frequency="native") if gross is not None else None
-    metrics = list(result.metrics)
-    existing_metric_names = {metric.name for metric in metrics}
-    metrics.extend(
-        metric
-        for metric in sharpe_evidence_metrics(
-            net,
-            frequency=frequency,
-            min_observations=min_observations,
-            trial_sharpes=[],
-        ).values()
-        if metric.name not in existing_metric_names
+    statistical_net = statistical_returns(timestamps, net, frequency=frequency, calendar=calendar)
+    statistical_gross = (
+        statistical_returns(timestamps, gross, frequency=frequency, calendar=calendar)
+        if gross is not None else None
     )
+    saved_statistical_metrics = tuple(metric for metric in result.metrics if metric.name in {"sharpe", "psr", "dsr"})
+    predictive_metrics = [metric for metric in result.metrics if metric.name not in {"sharpe", "psr", "dsr"}]
+    recomputed_metrics = list(sharpe_evidence_metrics(
+        statistical_net.to_numpy(),
+        frequency=frequency,
+        min_observations=min_observations,
+        trial_sharpes=[],
+    ).values())
+    convention = return_convention(frequency)
+    for metric in recomputed_metrics:
+        metric.inputs.update({"return_convention": convention, "calendar": calendar, "recomputed_from_saved_returns": True})
+        metric.conventions.update({"return_convention": convention, "calendar": calendar})
     return {
         "label": label,
         "run_id": result.ref.run_id,
@@ -202,8 +212,10 @@ def _period_summary(label: str, result: RunResult, *, frequency: str, min_observ
         "slippage_cost": slippage_cost,
         "turnover": float(backtest.turnover.sum()) if getattr(backtest, "turnover", None) is not None else "unavailable",
         "native_net": native_net,
+        "requested_net": equity_statistics(statistical_net.to_numpy(), frequency=frequency),
         "session_net": session_summary,
         "native_gross": gross_summary,
+        "requested_gross": equity_statistics(statistical_gross.to_numpy(), frequency=frequency) if statistical_gross is not None else None,
         "net_final_equity": float(backtest.equity.get_column("equity")[-1]),
         "gross_final_equity": (
             float(backtest.equity.get_column("gross_equity")[-1])
@@ -213,15 +225,19 @@ def _period_summary(label: str, result: RunResult, *, frequency: str, min_observ
         "first_timestamp": timestamps[0] if timestamps else None,
         "last_timestamp": timestamps[-1] if timestamps else None,
         "all_cash": orders.height == 0,
-        "metrics": tuple(metrics),
+        "metrics": tuple(predictive_metrics),
+        "recomputed_statistical_metrics": tuple(recomputed_metrics),
+        "saved_statistical_metrics": saved_statistical_metrics,
+        "return_convention": convention,
+        "calendar": calendar,
         "status": "available",
     }
 
 
-def _run_metadata(label: str, result: RunResult, *, frequency: str, min_observations: int, fees_bps: float, slippage_bps: float) -> str:
+def _run_metadata(label: str, result: RunResult, *, frequency: str, min_observations: int, fees_bps: float, slippage_bps: float, calendar: str = "XNYS") -> str:
     summary = _period_summary(
         label, result, frequency=frequency, min_observations=min_observations,
-        fees_bps=fees_bps, slippage_bps=slippage_bps,
+        fees_bps=fees_bps, slippage_bps=slippage_bps, calendar=calendar,
     )
     rows = [
         ("Run ID", summary["run_id"]),
@@ -236,8 +252,10 @@ def _run_metadata(label: str, result: RunResult, *, frequency: str, min_observat
         ("Configured slippage (bps)", slippage_bps),
         ("Absolute quantity turnover", summary.get("turnover", "unavailable")),
         ("Native net return", summary.get("native_net", {}).get("total_return", "unavailable")),
+        (f"Configured {frequency} net return ({summary.get('return_convention', 'unknown')})", summary.get("requested_net", {}).get("total_return", "unavailable")),
         ("Session-daily net return", summary.get("session_net", {}).get("total_return", "unavailable")),
         ("Native gross return", (summary.get("native_gross") or {}).get("total_return", "unavailable")),
+        (f"Configured {frequency} gross return ({summary.get('return_convention', 'unknown')})", (summary.get("requested_gross") or {}).get("total_return", "unavailable")),
         ("Net final equity", summary.get("net_final_equity", "unavailable")),
         ("Gross final equity", summary.get("gross_final_equity", "unavailable")),
         ("Native maximum drawdown", summary.get("native_net", {}).get("maximum_drawdown", "unavailable")),
@@ -247,6 +265,8 @@ def _run_metadata(label: str, result: RunResult, *, frequency: str, min_observat
         for key, value in rows
     )
     metrics_html = _metric_rows(summary["metrics"])
+    recomputed_html = _metric_rows(summary.get("recomputed_statistical_metrics", ()))
+    saved_statistical_html = _metric_rows(summary.get("saved_statistical_metrics", ()))
     if summary.get("all_cash"):
         cash_note = "<p><strong>All-cash result:</strong> no orders were filled, so the saved equity stays at initial capital and cost totals are zero.</p>"
     elif summary["status"] != "available":
@@ -256,7 +276,9 @@ def _run_metadata(label: str, result: RunResult, *, frequency: str, min_observat
     return (
         f"<section><h2>{html.escape(label)}</h2>"
         f"<table><tbody>{rows_html}</tbody></table>{cash_note}"
-        f"<h3>Saved metric values and unavailable reasons</h3><table><tbody>{metrics_html}</tbody></table></section>"
+        f"<h3>Predictive metrics as saved</h3><table><tbody>{metrics_html}</tbody></table>"
+        f"<h3>Recomputed statistical metrics using {html.escape(summary.get('return_convention', 'unknown'))}</h3><table><tbody>{recomputed_html}</tbody></table>"
+        f"<h3>Saved statistical metrics as recorded</h3><p>Historical saved values are preserved; these may use legacy return units.</p><table><tbody>{saved_statistical_html}</tbody></table></section>"
     )
 
 
@@ -270,6 +292,13 @@ def _provenance_html(result: RunResult) -> str:
         for key, value in sorted(provenance.items())
     )
     return f"<table><tbody>{rows}</tbody></table>"
+
+
+def _result_calendar(result: RunResult, config: PipelineConfig) -> str:
+    """Prefer the immutable source snapshot calendar, then configured data calendar."""
+    if result.snapshot is not None and result.snapshot.calendar:
+        return result.snapshot.calendar
+    return config.data.calendar
 
 
 def generate_demo_report(
@@ -301,12 +330,12 @@ def generate_demo_report(
         f"<h2>Dataset provenance and timeframe</h2>{_provenance_html(development)}"
         f"<p>Selected model: <strong>{html.escape(selected_model)}</strong>; candidate status: <code>{html.escape(_format_value(selected_status))}</code>.</p>"
         + (
-            "<p><strong>Coverage note:</strong> the generated hourly option contains one bar per session per ticker; it is not multi-bar intraday coverage.</p>"
-            if development.snapshot is not None and development.snapshot.timeframe.value == "1h"
+            f"<p>Saved execution timeframe: <strong>{html.escape(development.snapshot.timeframe.value)}</strong>; calendar: <strong>{html.escape(_result_calendar(development, config))}</strong>.</p>"
+            if development.snapshot is not None
             else ""
         )
-        + _run_metadata("Development", development, frequency=config.statistics.frequency, min_observations=config.statistics.min_observations, fees_bps=config.backtest.fees_bps, slippage_bps=config.backtest.slippage_bps)
-        + _run_metadata("Synthetic holdout", holdout, frequency=config.statistics.frequency, min_observations=config.statistics.min_observations, fees_bps=config.backtest.fees_bps, slippage_bps=config.backtest.slippage_bps)
+        + _run_metadata("Development", development, frequency=config.statistics.frequency, min_observations=config.statistics.min_observations, fees_bps=config.backtest.fees_bps, slippage_bps=config.backtest.slippage_bps, calendar=_result_calendar(development, config))
+        + _run_metadata("Synthetic holdout", holdout, frequency=config.statistics.frequency, min_observations=config.statistics.min_observations, fees_bps=config.backtest.fees_bps, slippage_bps=config.backtest.slippage_bps, calendar=_result_calendar(holdout, config))
     )
     timestamps = development.backtest.equity.get_column("timestamp").to_list()
     return generate_local_report(
@@ -316,6 +345,7 @@ def generate_demo_report(
         timestamps=timestamps,
         title="Quant ML Lab offline demo",
         frequency=config.statistics.frequency,
+        calendar=_result_calendar(development, config),
         summary_html=summary_html,
     )
 
@@ -341,7 +371,7 @@ def generate_run_report(
         f"<h2>Dataset provenance</h2>{_provenance_html(result)}"
         f"<h2>Candidate comparison</h2><pre>{html.escape(_format_value(result.artifact_manifest.get('candidates', [])))}</pre>"
         f"<h2>Campaign evidence</h2><pre>{html.escape(_format_value(evidence or {'status': 'unavailable', 'reason': 'not requested'}))}</pre>"
-        + _run_metadata(report_type.title(), result, frequency=config.statistics.frequency, min_observations=config.statistics.min_observations, fees_bps=config.backtest.fees_bps, slippage_bps=config.backtest.slippage_bps)
+        + _run_metadata(report_type.title(), result, frequency=config.statistics.frequency, min_observations=config.statistics.min_observations, fees_bps=config.backtest.fees_bps, slippage_bps=config.backtest.slippage_bps, calendar=_result_calendar(result, config))
     )
     if result.backtest is None or result.backtest.net_returns is None:
         output = Path(path)
@@ -356,6 +386,7 @@ def generate_run_report(
         timestamps=timestamps,
         title=f"Quant ML Lab {report_type} report",
         frequency=config.statistics.frequency,
+        calendar=_result_calendar(result, config),
         summary_html=summary_html,
     )
 

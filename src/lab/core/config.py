@@ -10,7 +10,7 @@ from typing import Any, Literal, TypedDict
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, EnvSettingsSource, SettingsConfigDict
 
 
 class Timeframe(str, Enum):
@@ -45,6 +45,7 @@ TIMEFRAME_CONSTANTS: dict[Timeframe, TimeframeConstantValues] = {
 
 PIPELINE_CONFIG_PATH = Path("config/pipeline.yaml")
 PLATFORM_CONFIG_PATH = Path("config/platform.yaml")
+PIPELINE_CONFIG_SCHEMA_VERSION = "pipeline-config.v2"
 
 
 class StrictModel(BaseModel):
@@ -54,8 +55,6 @@ class StrictModel(BaseModel):
 class DataConfig(StrictModel):
     source: Literal["bundled_demo", "local", "provider", "snapshot"] = "bundled_demo"
     snapshot_id: str | None = None
-    raw_data_dir: Path = Path("data/raw")
-    processed_data_dir: Path = Path("data/processed")
     ticker_config_path: Path = Path("config/tickers.yaml")
     input_path: Path | None = None
     metadata_path: Path | None = None
@@ -76,7 +75,6 @@ class DataConfig(StrictModel):
 class ValidationConfig(StrictModel):
     null_tolerance: float = Field(default=0.001, ge=0.0, le=1.0)
     min_price: float = Field(default=0.0, ge=0.0)
-    require_timezone: bool = True
 
 
 class FeaturesConfig(StrictModel):
@@ -104,7 +102,6 @@ class FFDConfig(StrictModel):
 class TensorConfig(StrictModel):
     sequence_len: PositiveInt = 60
     batch_size: PositiveInt = 32
-    train_cutoff_date: str | None = None
 
 
 class TripleBarrierConfig(StrictModel):
@@ -329,8 +326,11 @@ CANONICAL_SECTIONS = {
 def _read_yaml(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     if not path.exists():
-        return {}
-    raw = yaml.safe_load(path.read_text()) or {}
+        raise FileNotFoundError(path)
+    try:
+        raw = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Malformed YAML configuration at {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError(f"Expected mapping in YAML config: {path}")
     return raw
@@ -387,8 +387,6 @@ def _translate_yaml(raw: dict[str, Any]) -> dict[str, Any]:
             _set_nested(translated, fields[key], value, f"legacy {section}")
 
     flat_fields = {
-        "raw_data_dir": ("data", "raw_data_dir"),
-        "processed_data_dir": ("data", "processed_data_dir"),
         "ticker_config_path": ("data", "ticker_config_path"),
         "ingestion_start": ("data", "ingestion_start"),
         "timeframe": ("data", "timeframe"),
@@ -401,7 +399,6 @@ def _translate_yaml(raw: dict[str, Any]) -> dict[str, Any]:
         "min_price": ("validation", "min_price"),
         "sequence_len": ("tensor", "sequence_len"),
         "batch_size": ("tensor", "batch_size"),
-        "train_cutoff_date": ("tensor", "train_cutoff_date"),
         "profit_taking": ("task", "triple_barrier", "profit_taking"),
         "stop_loss": ("task", "triple_barrier", "stop_loss"),
         "vol_lookback_bars": ("task", "triple_barrier", "volatility_span"),
@@ -441,6 +438,16 @@ def _yaml_settings_source() -> dict[str, Any]:
     return _load_yaml_defaults()
 
 
+def _validate_resolved_config(cls: type["PipelineConfig"], values: dict[str, Any], provenance: dict[str, Any]) -> "PipelineConfig":
+    """Run full Pydantic validation without reloading BaseSettings sources."""
+    instance = cls.__new__(cls)
+    cls.__pydantic_validator__.validate_python(
+        {**values, "source_provenance": provenance},
+        self_instance=instance,
+    )
+    return instance
+
+
 class PipelineConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -462,6 +469,7 @@ class PipelineConfig(BaseSettings):
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     statistics: StatisticsConfig = Field(default_factory=StatisticsConfig)
     campaign: CampaignConfig = Field(default_factory=CampaignConfig)
+    source_provenance: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
     @classmethod
     def settings_customise_sources(
@@ -475,14 +483,75 @@ class PipelineConfig(BaseSettings):
         return init_settings, env_settings, dotenv_settings, _yaml_settings_source, file_secret_settings
 
     def __init__(self, **data: Any):
-        super().__init__(**_translate_yaml(data))
+        explicit_provenance = data.pop("source_provenance", None)
+        translated = _translate_yaml(data)
+        super().__init__(**translated)
+        if explicit_provenance is None:
+            env_fields = set(EnvSettingsSource(type(self))())
+            dotenv_fields = set(DotEnvSettingsSource(type(self))())
+            yaml_fields = set(_load_yaml_defaults(PIPELINE_CONFIG_PATH))
+            runtime_fields = set(translated)
+            self.source_provenance = {
+                "selected_yaml": str(PIPELINE_CONFIG_PATH),
+                "yaml_fields": sorted(yaml_fields),
+                "dotenv_fields": sorted(dotenv_fields),
+                "environment_fields": sorted(env_fields),
+                "runtime_override_fields": sorted(runtime_fields),
+                "code_default_fields": sorted(CANONICAL_SECTIONS - yaml_fields - dotenv_fields - env_fields - runtime_fields),
+            }
+        else:
+            self.source_provenance = explicit_provenance
 
     @classmethod
     def from_yaml(cls, path: str | Path = PIPELINE_CONFIG_PATH, overrides: dict[str, Any] | None = None) -> "PipelineConfig":
-        values = _load_yaml_defaults(path)
-        if overrides:
-            values = _deep_merge(values, _translate_yaml(overrides))
-        return cls(**values)
+        yaml_values = _load_yaml_defaults(path)
+        dotenv_values = DotEnvSettingsSource(cls)()
+        environment_values = EnvSettingsSource(cls)()
+        runtime_values = _translate_yaml(overrides or {})
+        values = _deep_merge(yaml_values, dotenv_values)
+        values = _deep_merge(values, environment_values)
+        values = _deep_merge(values, runtime_values)
+        provenance = {
+            "selected_yaml": str(path),
+            "yaml_fields": sorted(yaml_values),
+            "dotenv_fields": sorted(dotenv_values),
+            "environment_fields": sorted(environment_values),
+            "runtime_override_fields": sorted(runtime_values),
+            "code_default_fields": sorted(CANONICAL_SECTIONS - set(yaml_values) - set(dotenv_values) - set(environment_values) - set(runtime_values)),
+        }
+        return _validate_resolved_config(cls, values, provenance)
+
+    @classmethod
+    def from_artifact_config(
+        cls,
+        values: dict[str, Any],
+        *,
+        schema_version: str | None,
+        expected_hash: str | None = None,
+    ) -> "PipelineConfig":
+        """Load current or explicitly supported historical run configuration."""
+        if schema_version == PIPELINE_CONFIG_SCHEMA_VERSION:
+            return _validate_resolved_config(cls, values, {"artifact_schema": schema_version})
+        if schema_version not in {None, "pipeline-config.v1"}:
+            raise ValueError(f"Unsupported saved pipeline config schema: {schema_version}")
+        migrated = deepcopy(values)
+        removed: dict[str, Any] = {}
+        for section, keys in {
+            "data": ("raw_data_dir", "processed_data_dir"),
+            "validation": ("require_timezone",),
+            "tensor": ("train_cutoff_date",),
+        }.items():
+            current = migrated.get(section)
+            if isinstance(current, dict):
+                for key in keys:
+                    if key in current:
+                        removed[f"{section}.{key}"] = current.pop(key)
+        provenance = {
+            "artifact_schema": schema_version or "pipeline-config.v1-implicit",
+            "migrated_legacy_fields": sorted(removed),
+            "legacy_artifact_config_hash": expected_hash,
+        }
+        return _validate_resolved_config(cls, migrated, provenance)
 
     def model_hash(self) -> str:
         payload = self.model_dump(mode="json")
@@ -492,14 +561,6 @@ class PipelineConfig(BaseSettings):
     @property
     def resolved_config_hash(self) -> str:
         return self.model_hash()
-
-    @property
-    def raw_data_dir(self) -> Path:
-        return self.data.raw_data_dir
-
-    @property
-    def processed_data_dir(self) -> Path:
-        return self.data.processed_data_dir
 
     @property
     def ticker_config_path(self) -> Path:
@@ -572,10 +633,6 @@ class PipelineConfig(BaseSettings):
     @property
     def batch_size(self) -> int:
         return self.tensor.batch_size
-
-    @property
-    def train_cutoff_date(self) -> str | None:
-        return self.tensor.train_cutoff_date
 
     @property
     def max_position_size(self) -> float:

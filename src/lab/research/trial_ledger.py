@@ -164,6 +164,7 @@ class TrialLedger:
         frequency: str,
         cost_treatment: str | None = None,
         task: str | None = None,
+        return_convention: str | None = None,
     ) -> dict[str, Any]:
         """Select one verified successful attempt per logical trial."""
         evidence = self.comparable_evidence(
@@ -177,9 +178,26 @@ class TrialLedger:
         complete: list[dict[str, Any]] = []
         exclusions: list[dict[str, Any]] = []
         for trial in evidence:
+            if return_convention is not None and trial["settings"].get("return_convention") != return_convention:
+                for attempt in trial["attempts"] or [None]:
+                    exclusions.append({
+                        "logical_trial_id": trial["logical_trial_id"],
+                        "attempt_id": attempt["attempt_id"] if attempt else None,
+                        "status": attempt["status"] if attempt else "missing",
+                        "reason": (
+                            f"trial settings return_convention {trial['settings'].get('return_convention')!r} "
+                            f"does not match requested {return_convention!r}"
+                        ),
+                    })
+                continue
             successful = [
                 attempt for attempt in trial["attempts"]
-                if attempt["status"] == "completed" and (attempt.get("result") or {}).get("development_net_returns")
+                if attempt["status"] == "completed"
+                and (attempt.get("result") or {}).get("development_net_returns")
+                and (
+                    return_convention is None
+                    or (attempt.get("result") or {}).get("return_convention") == return_convention
+                )
             ]
             selected = successful[-1] if successful else None
             if selected is not None:
@@ -187,11 +205,22 @@ class TrialLedger:
             for attempt in trial["attempts"]:
                 if selected is not None and attempt["attempt_id"] == selected["attempt_id"]:
                     continue
+                result = attempt.get("result") or {}
+                has_returns = bool(result.get("development_net_returns"))
+                if attempt["status"] != "completed":
+                    reason = attempt.get("error") or "missing returns"
+                elif return_convention is not None and result.get("return_convention") != return_convention:
+                    actual_convention = result.get("return_convention")
+                    reason = f"attempt result return_convention {actual_convention!r} does not match requested {return_convention!r}"
+                elif not has_returns:
+                    reason = "missing returns"
+                else:
+                    reason = "duplicate successful attempt"
                 exclusions.append({
                     "logical_trial_id": trial["logical_trial_id"],
                     "attempt_id": attempt["attempt_id"],
                     "status": attempt["status"],
-                    "reason": "duplicate successful attempt" if attempt["status"] == "completed" else attempt.get("error") or "missing returns",
+                    "reason": reason,
                 })
         return {"complete": complete, "exclusions": exclusions, "population": len(evidence)}
 

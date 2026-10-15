@@ -60,11 +60,10 @@ def test_partition_isolation(tmp_path):
 
 def test_pipeline_yaml_matches_pipeline_config_fields():
     raw = yaml.safe_load(PIPELINE_CONFIG_PATH.read_text())
-    yaml_fields = set()
-    for section_values in raw.values():
-        yaml_fields.update(section_values)
-
-    assert yaml_fields == set(PipelineConfig.model_fields)
+    assert set(raw) == set(PipelineConfig.model_fields) - {"source_provenance"}
+    config = PipelineConfig.from_yaml()
+    for section, values in raw.items():
+        assert set(values) <= set(getattr(config, section).model_fields)
 
 
 # tests/test_dagster_assets.py
@@ -122,3 +121,17 @@ def test_asset_materialization_synthetic(tmp_path):
 
         for asset in expected_assets:
             assert asset in materialized_keys
+def test_supported_dagster_definitions_are_ingestion_only():
+    from lab.platform.dagster import defs
+
+    names = {
+        key.to_user_string()
+        for asset_definition in defs.assets
+        for key in asset_definition.keys
+    }
+    assert names == {"ingestion_publication"}
+    assert {spec.name for check in defs.asset_checks for spec in check.check_specs} == {"ingestion_calendar_coverage"}
+    assert {schedule.name for schedule in defs.schedules} == {
+        "daily_market_data_ingestion",
+        "hourly_market_data_ingestion",
+    }

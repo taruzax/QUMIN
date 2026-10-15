@@ -15,7 +15,7 @@ from lab.data.validators import (
     validate_prices,
     validate_schema,
 )
-from lab.quant.validators import validate_canonical_bars
+from lab.quant.validators import compare_bar_coverage, validate_canonical_bars
 
 
 def test_valid_data_passes(single_ticker_df):
@@ -125,3 +125,18 @@ def test_canonical_bars_reject_bad_ohlc():
     )
     with pytest.raises(DataValidationError, match="OHLC"):
         validate_canonical_bars(invalid, calendar="XNYS", timeframe="1h")
+
+
+def test_calendar_coverage_reports_a_missing_expected_ticker_bar():
+    expected = pl.DataFrame({
+        "session_id": ["2024-01-02"],
+        "bar_open_time": [datetime(2024, 1, 2, 14, 30, tzinfo=timezone.utc)],
+        "bar_close_time": [datetime(2024, 1, 2, 15, 30, tzinfo=timezone.utc)],
+    })
+    observed = expected.head(0).with_columns(pl.lit(None, dtype=pl.Utf8).alias("ticker"))
+
+    result = compare_bar_coverage(expected, observed, tickers=("AAA",))
+
+    assert result["missing_count"] == 1
+    assert result["missing"]["ticker"].to_list() == ["AAA"]
+    assert result["valid_count"] == 0

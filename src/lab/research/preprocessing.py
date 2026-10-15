@@ -1,12 +1,13 @@
 from dataclasses import dataclass
+from datetime import timezone
 import hashlib
 from typing import Any
 
 import numpy as np
 import polars as pl
 
-from lab.core.config import PipelineConfig
-from lab.core.contracts import FoldBundle, MarketSnapshot, PreparedDataset, PreparedDatasetRef, PreprocessingState
+from lab.core.config import PipelineConfig, get_platform_config
+from lab.core.contracts import FoldBundle, MarketSnapshot, PreparedDataset, PreparedDatasetRef, PreprocessingState, ScoringTargets
 from lab.core.schemas import validate_feature_names
 from lab.platform.data_access import load_market_snapshot
 from lab.platform.dataset_store import DatasetStore
@@ -170,7 +171,7 @@ def prepare_dataset(
 ) -> PreparedDataset:
     """Load one snapshot and produce causal features, labels, and split plan."""
     if dataset_ref is not None:
-        dataset = DatasetStore().load(dataset_ref)
+        dataset = DatasetStore(get_platform_config().paths.artifacts_dir).load(dataset_ref)
         if dataset_ref.config_hash != config.resolved_config_hash:
             raise ValueError("Prepared dataset was created from a different effective pipeline configuration")
         if dataset_ref.snapshot_hash != dataset.snapshot.snapshot_hash:
@@ -201,7 +202,7 @@ def prepare_and_store_dataset(
     """Prepare a dataset once and persist its immutable reusable bundle."""
     dataset = prepare_dataset(config, snapshot=snapshot)
     split_hash = hashlib.sha256(dataset.split_plan.model_dump_json().encode()).hexdigest()
-    reference = DatasetStore(store_root or "artifacts").write(
+    reference = DatasetStore(store_root).write(
         dataset,
         config_hash=config.resolved_config_hash,
         split_hash=split_hash,
@@ -210,7 +211,7 @@ def prepare_and_store_dataset(
 
 
 def prepare_fold(dataset: PreparedDataset, fold_spec) -> FoldBundle:
-    """Fit fold state on train history and construct aligned train/evaluation windows."""
+    """Fit fold state and separate observable evaluation windows from scoreable labels."""
     config = dataset.config if isinstance(dataset.config, PipelineConfig) else PipelineConfig()
     preprocessor = fit_preprocessor(
         dataset.features,
@@ -221,13 +222,19 @@ def prepare_fold(dataset: PreparedDataset, fold_spec) -> FoldBundle:
     )
     transformed = preprocessor.transform(dataset.features)
     train_labels = fold_training_labels(dataset.labels, fold_spec)
-    evaluation_labels, score_diagnostics = scoreable_labels(
+    scoreable, score_diagnostics = scoreable_labels(
         dataset.labels,
         fold_spec.validation_start,
         fold_spec.validation_end,
     )
     train_allowed = {(row["ticker"], row["decision_time"]) for row in train_labels.to_dicts()}
-    evaluation_allowed = {(row["ticker"], row["decision_time"]) for row in evaluation_labels.to_dicts()}
+    evaluation_allowed = {
+        (str(row["ticker"]), row["timestamp"])
+        for row in dataset.features.filter(
+            (pl.col("timestamp") >= fold_spec.validation_start)
+            & (pl.col("timestamp") < fold_spec.validation_end)
+        ).select("ticker", "timestamp").to_dicts()
+    }
     target_name = "target_1b_v2" if "target_1b_v2" in dataset.labels.columns else "label"
     train_samples = build_sample_set(
         transformed,
@@ -241,14 +248,34 @@ def prepare_fold(dataset: PreparedDataset, fold_spec) -> FoldBundle:
         transformed,
         dataset.feature_specification,
         config.tensor.sequence_len,
-        labels=evaluation_labels,
         allowed_decisions=evaluation_allowed,
-        target_name=target_name,
     )
+    scoreable_rows = scoreable.select("ticker", "decision_time", target_name).to_dicts()
+    scoreable_by_key = {
+        (str(row["ticker"]), row["decision_time"].astimezone(timezone.utc)): float(row[target_name])
+        for row in scoreable_rows
+    }
+    if len(scoreable_by_key) != len(scoreable_rows):
+        raise ValueError("Scoreable label keys must be unique")
+    scoring_pairs = [
+        (key, scoreable_by_key[(key.ticker, key.timestamp.astimezone(timezone.utc))])
+        for key in evaluation_samples.keys
+        if (key.ticker, key.timestamp.astimezone(timezone.utc)) in scoreable_by_key
+    ]
+    scoring_keys = tuple(key for key, _ in scoring_pairs)
+    scoring_values = np.asarray([value for _, value in scoring_pairs], dtype=np.float32)
+    score_diagnostics = {
+        **score_diagnostics,
+        "prediction_rows": len(evaluation_samples.keys),
+        "scored_prediction_rows": len(scoring_keys),
+        "scoreable_rows_without_valid_window": max(0, len(scoreable_by_key) - len(scoring_keys)),
+    }
     return FoldBundle(
+        fold_ref="holdout" if fold_spec.fold_id < 0 else str(fold_spec.fold_id),
         train_samples=train_samples,
         evaluation_samples=evaluation_samples,
-        scoring_keys=evaluation_samples.keys,
+        scoring_keys=scoring_keys,
+        scoring_targets=ScoringTargets(keys=scoring_keys, values=scoring_values),
         preprocessor=preprocessor,
         boundaries={
             "train_start": fold_spec.train_start,

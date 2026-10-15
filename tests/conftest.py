@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import torch  # noqa: F401
+
 from datetime import datetime
 
 import numpy as np
@@ -84,5 +86,4 @@ def pipeline_config() -> PipelineConfig:
     return PipelineConfig(
         sequence_len=10,
         batch_size=4,
-        train_cutoff_date=None,
     )

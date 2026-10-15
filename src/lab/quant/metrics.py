@@ -6,9 +6,74 @@ import math
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from scipy.stats import norm, skew, kurtosis
 
 from lab.core.contracts import MetricResult
+
+try:
+    import exchange_calendars as xcals
+except ImportError:  # pragma: no cover - exchange_calendars is a declared dependency
+    xcals = None
+
+
+def _timestamped_returns(timestamps: Any, returns: Any, *, name: str) -> pd.Series:
+    values = np.asarray(returns, dtype=float).reshape(-1)
+    index = pd.DatetimeIndex(pd.to_datetime(list(timestamps), utc=True))
+    if len(index) != len(values):
+        raise ValueError("timestamps and returns must have the same length")
+    if index.hasnans:
+        raise ValueError("timestamps must be valid")
+    if not np.isfinite(values).all():
+        raise ValueError("returns must be finite")
+    return pd.Series(values, index=index, name=name)
+
+
+def compound_session_returns(
+    timestamps: Any,
+    returns: Any,
+    *,
+    calendar: str = "XNYS",
+) -> pd.Series:
+    """Compound native returns by actual exchange session without padding closed days."""
+    values = _timestamped_returns(timestamps, returns, name="native_return")
+    if values.empty:
+        return pd.Series(dtype=float, index=values.index, name="daily_return")
+    if xcals is None:
+        raise ImportError("exchange_calendars is required to compound returns by session")
+    exchange = xcals.get_calendar(calendar)
+    session_dates = [
+        exchange.minute_to_session(timestamp, direction="previous")
+        for timestamp in values.index
+    ]
+    frame = pd.DataFrame({"return": values.to_numpy(), "session": session_dates}, index=values.index)
+    return frame.groupby("session", sort=True)["return"].apply(
+        lambda row: float(np.prod(1.0 + row.to_numpy()) - 1.0)
+    ).rename("daily_return")
+
+
+def statistical_returns(
+    timestamps: Any,
+    returns: Any,
+    *,
+    frequency: str,
+    calendar: str = "XNYS",
+) -> pd.Series:
+    """Return timestamped observations using the requested return convention."""
+    if frequency == "native":
+        return _timestamped_returns(timestamps, returns, name="native_return")
+    if frequency == "daily":
+        return compound_session_returns(timestamps, returns, calendar=calendar)
+    raise ValueError(f"Unsupported return frequency: {frequency}")
+
+
+def return_convention(frequency: str) -> str:
+    """Return the versioned unit label for a configured statistical frequency."""
+    if frequency == "daily":
+        return "session-compounded.v1"
+    if frequency == "native":
+        return "native-bars.v1"
+    raise ValueError(f"Unsupported return frequency: {frequency}")
 
 
 def _array(values: Any) -> np.ndarray:

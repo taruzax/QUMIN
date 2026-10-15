@@ -53,3 +53,15 @@ def test_purge_removes_equality_boundary():
 def test_split_plan_rejects_short_validation_history():
     with pytest.raises(ValueError, match="too short"):
         build_split_plan(_bars(6), SplitsConfig(n_folds=3, development_train_fraction=0.8))
+
+
+@pytest.mark.parametrize(
+    "settings,message",
+    [
+        ({"diagnostic_mode": True}, "diagnostic_mode=true"),
+        ({"embargo_bars": 1}, "embargo_bars>0"),
+    ],
+)
+def test_main_walk_forward_rejects_unsupported_split_settings(settings, message):
+    with pytest.raises(ValueError, match=message):
+        build_split_plan(_bars(), SplitsConfig(**settings))

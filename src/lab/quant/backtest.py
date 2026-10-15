@@ -14,7 +14,7 @@ try:
 except ImportError:  # pragma: no cover - dependency is declared for normal installs
     vbt = None
 
-from lab.core.config import BacktestConfig, TaskConfig
+from lab.core.config import BacktestConfig, TaskConfig, Timeframe
 from lab.core.contracts import AllocationFrame, BacktestResult, MarketSnapshot, PredictionFrame
 
 
@@ -300,7 +300,7 @@ def _target_orders(
     return orders, event_rows
 
 
-def _run_vectorbt(close: pd.DataFrame, orders: pd.DataFrame, config: BacktestConfig, *, fee_rate: float):
+def _run_vectorbt(close: pd.DataFrame, orders: pd.DataFrame, config: BacktestConfig, *, fee_rate: float, freq: str = "1D"):
     if vbt is None:
         raise RuntimeError("VectorBT is required for simulate_strategy; install the declared project dependency")
     sizes = pd.DataFrame(0.0, index=close.index, columns=close.columns)
@@ -328,7 +328,7 @@ def _run_vectorbt(close: pd.DataFrame, orders: pd.DataFrame, config: BacktestCon
         group_by=True,
         allow_partial=False,
         raise_reject=True,
-        freq="1D",
+        freq=freq,
     )
 
 
@@ -361,8 +361,9 @@ def simulate_strategy(
         task_config=task_config, backtest_config=backtest_config,
         fee_rate=0.0, liquidation=liquidation,
     )
-    gross_pf = _run_vectorbt(close, gross_orders, backtest_config, fee_rate=0.0)
-    net_pf = _run_vectorbt(close, orders, backtest_config, fee_rate=fee_rate)
+    nominal_frequency = "1D" if snapshot.timeframe == Timeframe.D1 else "1h"
+    gross_pf = _run_vectorbt(close, gross_orders, backtest_config, fee_rate=0.0, freq=nominal_frequency)
+    net_pf = _run_vectorbt(close, orders, backtest_config, fee_rate=fee_rate, freq=nominal_frequency)
     actual_records = net_pf.orders.records_readable
     quantity_rtol = 1e-9
     quantity_atol = 1e-9

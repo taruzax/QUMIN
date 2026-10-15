@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from lab.core.contracts import WindowSet
 from lab.models.base import BaseModel
 from lab.models.devices import resolve_device
-from lab.models.trainer import train_recurrent
+from lab.models.trainer import seed_torch, train_recurrent
 
 
 class _RecurrentNetwork(nn.Module):
@@ -101,11 +101,13 @@ class _RecurrentModel(BaseModel):
         duration: int | None = None,
         stopping_patience: int = 5,
     ) -> "_RecurrentModel":
+        """Fit from configured initialization; repeated fits continue current weights."""
         features, targets = self.validate_inputs(X, y)
         assert targets is not None
         if len(features.shape) != 3:
             raise ValueError("Recurrent models require features with shape [N, T, F]")
         self.feature_dim = int(features.shape[-1])
+        seed_torch(self.seed, self.deterministic_policy)
         network = self._ensure_network(self.feature_dim)
         if stopping_data is not None:
             stop_features, stop_targets = self.validate_inputs(*stopping_data)

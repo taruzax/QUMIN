@@ -168,13 +168,14 @@ class XGBoostModel(BaseModel):
                 self.adapter_mode = "classification"
 
         if stopping_data is not None and self._estimator is not None:
-            evaluation_result = self._estimator.evals_result()
+            with threadpool_limits(limits=1, user_api="openmp"):
+                evaluation_result = self._estimator.evals_result()
+                best_iteration = getattr(self._estimator, "best_iteration", None)
             series = [next(iter(metrics.values()), []) for metrics in evaluation_result.values()]
             train_values = series[0] if series else []
             stop_values = series[-1] if series else []
             self.training_history = [{"round": float(index + 1), "loss": float(value)} for index, value in enumerate(train_values)]
             self.stopping_history = [{"round": float(index + 1), "loss": float(value)} for index, value in enumerate(stop_values)]
-            best_iteration = getattr(self._estimator, "best_iteration", None)
             self.selected_duration = int(best_iteration + 1) if best_iteration is not None else effective_estimators
             self.stopping_config = {"patience": int(stopping_patience), "metric": "validation_loss"}
         else:

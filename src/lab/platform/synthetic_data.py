@@ -14,6 +14,43 @@ from lab.quant.timing import bar_times_for_session, get_exchange_calendar
 DEMO_TICKERS = ("ALFA", "BRAV", "CHAR", "DELT", "ECHO")
 DEMO_SEED = 42
 DEMO_GENERATOR_VERSION = "synthetic-demo-v1"
+HOURLY_DEMO_GENERATOR_VERSION = "synthetic-demo-hourly-v1"
+
+
+def _generate_hourly_demo_bars(sessions, *, tickers: tuple[str, ...], seed: int, calendar: str) -> pl.DataFrame:
+    session_bars = [bar_times_for_session(calendar, session, Timeframe.H1) for session in sessions]
+    total_bars = sum(len(items) for items in session_bars)
+    rng = np.random.default_rng(seed)
+    common_factors = rng.normal(0.0002, 0.008, size=total_bars)
+    rows: list[dict[str, Any]] = []
+    for asset_index, ticker in enumerate(tickers):
+        idiosyncratic = rng.normal(0.0, 0.006, size=total_bars)
+        prices = 80.0 + asset_index * 15.0
+        bar_index = 0
+        for bars in session_bars:
+            overnight = rng.normal(0.0, 0.002)
+            for interval_index, (opened, closed, session_id) in enumerate(bars):
+                opened_price = prices * (1.0 + overnight if interval_index == 0 else 1.0)
+                close_return = common_factors[bar_index] * (0.5 + asset_index * 0.1) + idiosyncratic[bar_index]
+                closed_price = opened_price * (1.0 + close_return)
+                spread = abs(rng.normal(0.002, 0.001))
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "bar_open_time": opened,
+                        "bar_close_time": closed,
+                        "timestamp": closed,
+                        "open": round(float(opened_price), 6),
+                        "high": round(float(max(opened_price, closed_price) * (1.0 + spread)), 6),
+                        "low": round(float(min(opened_price, closed_price) * (1.0 - spread)), 6),
+                        "close": round(float(closed_price), 6),
+                        "volume": round(float(rng.lognormal(12.0, 0.15)), 3),
+                        "session_id": session_id,
+                    }
+                )
+                prices = closed_price
+                bar_index += 1
+    return pl.DataFrame(rows).sort(["ticker", "bar_open_time"])
 
 
 def generate_demo_bars(
@@ -30,6 +67,8 @@ def generate_demo_bars(
     exchange_calendar = get_exchange_calendar(calendar)
     end_session = pd.Timestamp("2024-12-31")
     sessions = exchange_calendar.sessions[exchange_calendar.sessions <= end_session][-n_sessions:]
+    if timeframe == Timeframe.H1:
+        return _generate_hourly_demo_bars(sessions, tickers=tickers, seed=seed, calendar=calendar)
     rng = np.random.default_rng(seed)
     common_factor = rng.normal(0.0002, 0.008, size=n_sessions)
     rows: list[dict[str, Any]] = []
@@ -71,7 +110,7 @@ def demo_metadata(
 ) -> dict[str, Any]:
     return {
         "dataset": "synthetic demonstration",
-        "generator_version": DEMO_GENERATOR_VERSION,
+        "generator_version": HOURLY_DEMO_GENERATOR_VERSION if timeframe == Timeframe.H1 else DEMO_GENERATOR_VERSION,
         "seed": seed,
         "calendar": calendar,
         "timeframe": timeframe.value,

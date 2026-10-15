@@ -1,5 +1,7 @@
 from importlib import import_module
 
+import pytest
+
 
 def test_relocated_financial_modules_preserve_legacy_exports():
     pairs = (
@@ -21,10 +23,15 @@ def test_relocated_financial_modules_preserve_legacy_exports():
 def test_relocated_platform_and_research_modules_preserve_legacy_exports():
     loader = import_module("lab.data.loader")
     data_access = import_module("lab.platform.data_access")
-    tensors = import_module("lab.data.tensor_loader")
     samples = import_module("lab.research.samples")
     assert loader.load_market_data is data_access.load_market_data
-    assert tensors.TimeSeriesDataset is samples.TimeSeriesDataset
+    for removed_name in (
+        "TimeSeriesDataset", "InferenceTimeSeriesDataset", "create_dataloaders",
+        "collate_batch", "collate_fn",
+    ):
+        assert not hasattr(samples, removed_name)
+    with pytest.raises(ModuleNotFoundError):
+        import_module("lab.data.tensor_loader")
 
 
 def test_dagster_has_one_compatibility_definitions_object():
@@ -33,3 +40,15 @@ def test_dagster_has_one_compatibility_definitions_object():
     root = import_module("lab.definitions")
     assert legacy.defs is current.defs
     assert root.defs is current.defs
+
+
+def test_legacy_public_modules_keep_forwarding_imports():
+    from lab.definitions import defs as definitions
+    from lab.defs import defs as legacy_defs
+    from lab.pipelines.data_pipeline import main as pipeline_main
+    from lab.research.data_pipeline import prepare_dataset, run_experiment
+
+    assert definitions is legacy_defs
+    assert callable(pipeline_main)
+    assert callable(prepare_dataset)
+    assert callable(run_experiment)

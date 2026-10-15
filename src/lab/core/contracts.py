@@ -270,14 +270,55 @@ class SampleSet(ContractModel):
         return self
 
 
+class ScoringTargets(ContractModel):
+    """Compact labels keyed independently from target-free evaluation windows."""
+
+    schema_version: str = "scoring-targets.v1"
+    keys: tuple[SampleKey, ...]
+    values: np.ndarray
+
+    @field_validator("values")
+    @classmethod
+    def validate_values(cls, value: np.ndarray) -> np.ndarray:
+        values = np.asarray(value, dtype=np.float32).copy()
+        if values.ndim != 1 or not np.isfinite(values).all():
+            raise ValueError("Scoring targets must be a finite one-dimensional array")
+        values.setflags(write=False)
+        return values
+
+    @model_validator(mode="after")
+    def validate_key_alignment(self) -> "ScoringTargets":
+        if len(self.keys) != len(self.values):
+            raise ValueError("Scoring targets must align with scoring keys")
+        if len({(key.ticker, key.timestamp) for key in self.keys}) != len(self.keys):
+            raise ValueError("Scoring target keys must be unique")
+        return self
+
+
 class FoldBundle(ContractModel):
-    schema_version: str = "fold-bundle.v1"
+    schema_version: str = "fold-bundle.v2"
+    fold_ref: str
     train_samples: SampleSet
     evaluation_samples: SampleSet
     scoring_keys: tuple[SampleKey, ...]
+    scoring_targets: ScoringTargets
     preprocessor: Any
     boundaries: dict[str, Any]
     diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_scoring_contract(self) -> "FoldBundle":
+        evaluation_ids = {(key.ticker, key.timestamp) for key in self.evaluation_samples.keys}
+        scoring_ids = [(key.ticker, key.timestamp) for key in self.scoring_keys]
+        if len(set(scoring_ids)) != len(scoring_ids):
+            raise ValueError("Fold scoring keys must be unique")
+        if not set(scoring_ids).issubset(evaluation_ids):
+            raise ValueError("Fold scoring keys must belong to evaluation keys")
+        if self.scoring_targets.keys != self.scoring_keys:
+            raise ValueError("Fold scoring targets must align with scoring_keys")
+        if self.evaluation_samples.y is not None or self.evaluation_samples.X.y is not None:
+            raise ValueError("Fold evaluation samples must not carry scoring targets")
+        return self
 
 
 class PredictionFrame(ContractModel):

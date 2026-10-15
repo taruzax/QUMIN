@@ -13,15 +13,16 @@ from typing import Any
 
 import polars as pl
 
-from lab.core.config import PipelineConfig, get_platform_config
+from lab.core.config import PIPELINE_CONFIG_SCHEMA_VERSION, PipelineConfig, get_platform_config
 from lab.core.contracts import PreparedDataset, PreparedDatasetRef, SplitPlan
 from lab.platform.artifacts import canonical_json_bytes, sha256_file
 from lab.platform.market_store import SnapshotCatalog
 
 
 class DatasetStore:
-    def __init__(self, root: str | Path = "artifacts", *, snapshot_root: str | Path | None = None) -> None:
-        self.root = Path(root) / "datasets"
+    def __init__(self, root: str | Path | None = None, *, snapshot_root: str | Path | None = None) -> None:
+        self.artifacts_root = Path(root) if root is not None else get_platform_config().paths.artifacts_dir
+        self.root = self.artifacts_root / "datasets"
         self.root.mkdir(parents=True, exist_ok=True)
         self.snapshot_root = Path(snapshot_root) if snapshot_root is not None else get_platform_config().paths.snapshot_dir
 
@@ -43,6 +44,7 @@ class DatasetStore:
         }
         dataset_id = f"dataset-{hashlib.sha256(canonical_json_bytes(identity)).hexdigest()[:24]}"
         bundle = self.root / dataset_id
+        self._ensure_snapshot(dataset.snapshot)
         if bundle.exists():
             reference = self._load_ref(bundle)
             self.verify(reference)
@@ -67,6 +69,8 @@ class DatasetStore:
                 "snapshot_id": dataset.snapshot.snapshot_id,
                 "snapshot_hash": dataset.snapshot.snapshot_hash,
                 "config_hash": effective_config_hash,
+                "config_schema_version": PIPELINE_CONFIG_SCHEMA_VERSION if isinstance(dataset.config, PipelineConfig) else None,
+                "config_source_provenance": dataset.config.source_provenance if isinstance(dataset.config, PipelineConfig) else None,
                 "feature_spec_hash": effective_feature_hash,
                 "split_hash": split_hash,
                 "feature_specification": dataset.feature_specification,
@@ -91,6 +95,19 @@ class DatasetStore:
                 shutil.rmtree(staging)
         return self._load_ref(bundle)
 
+    def _ensure_snapshot(self, snapshot) -> None:
+        catalog = SnapshotCatalog(self.snapshot_root)
+        try:
+            try:
+                entry = catalog.resolve(snapshot.snapshot_id)
+            except KeyError:
+                status = snapshot.validation_diagnostics.get("coverage_status", "accepted")
+                entry = catalog.publish(snapshot, coverage_status=status)
+            if entry.snapshot_hash != snapshot.snapshot_hash:
+                raise ValueError(f"Snapshot identity collision with different content: {snapshot.snapshot_id}")
+        finally:
+            catalog.connection.close()
+
     def load(self, reference: PreparedDatasetRef) -> PreparedDataset:
         self.verify(reference)
         bundle = Path(reference.bundle_path)
@@ -105,7 +122,14 @@ class DatasetStore:
             labels=pl.read_parquet(bundle / "labels.parquet"),
             split_plan=SplitPlan.model_validate(manifest["split_plan"]),
             exclusions=exclusions,
-            config=PipelineConfig.model_validate(manifest["config"]) if manifest.get("config") else None,
+            config=(
+                PipelineConfig.from_artifact_config(
+                    manifest["config"],
+                    schema_version=manifest.get("config_schema_version"),
+                    expected_hash=manifest.get("config_hash"),
+                )
+                if manifest.get("config") else None
+            ),
         )
 
     def resolve(self, dataset_id: str) -> PreparedDatasetRef:

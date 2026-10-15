@@ -13,14 +13,14 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from lab.core.config import PipelineConfig, get_platform_config
-from lab.core.contracts import AllocationFrame, BacktestResult, CampaignEvidenceReport, FoldBundle, FoldSpec, MarketSnapshot, MetricResult, PredictionFrame, PreparedDataset, PreparedDatasetRef, RunRef, RunResult, SampleKey
+from lab.core.config import PIPELINE_CONFIG_SCHEMA_VERSION, PipelineConfig, get_platform_config
+from lab.core.contracts import AllocationFrame, BacktestResult, CampaignEvidenceReport, FoldBundle, FoldSpec, MarketSnapshot, MetricResult, PredictionFrame, PreparedDataset, PreparedDatasetRef, RunRef, RunResult, SampleKey, ScoringTargets
 from lab.models.registry import create_model
 from lab.platform.artifacts import ArtifactStore, sha256_file
 from lab.platform.evidence_store import EvidenceStore
 from lab.platform.mlflow_adapter import log_local_model
 from lab.quant.backtest import simulate_strategy
-from lab.quant.metrics import classification_metrics, regression_metrics, sharpe_evidence_metrics, sharpe_statistics
+from lab.quant.metrics import classification_metrics, regression_metrics, return_convention, sharpe_evidence_metrics, sharpe_statistics, statistical_returns, unavailable_metric
 from lab.research.preprocessing import prepare_dataset, prepare_fold
 from lab.research.portfolio import build_allocations
 from lab.research.trial_ledger import TrialLedger
@@ -65,6 +65,10 @@ def train_fold(
 
 
 def predict_fold(model: Any, bundle: FoldBundle, *, model_ref: str, fold_ref: str, task: str) -> PredictionFrame:
+    if task not in {"regression", "classification"}:
+        raise ValueError("task must be regression or classification")
+    if fold_ref != bundle.fold_ref:
+        raise ValueError(f"Prediction fold identity {fold_ref!r} does not match bundle {bundle.fold_ref!r}")
     if task == "classification":
         predictions = model.predict_proba(bundle.evaluation_samples.X)
     else:
@@ -73,18 +77,68 @@ def predict_fold(model: Any, bundle: FoldBundle, *, model_ref: str, fold_ref: st
 
 
 def evaluate_predictions(prediction_frames: tuple[PredictionFrame, ...], bundles: tuple[FoldBundle, ...], *, task: str) -> tuple[MetricResult, ...]:
-    actual: list[float] = []
-    predicted: list[Any] = []
-    for prediction, bundle in zip(prediction_frames, bundles):
-        if bundle.evaluation_samples.y is None:
-            continue
-        actual.extend(bundle.evaluation_samples.y.reshape(-1).tolist())
-        predicted.extend(prediction.predictions.tolist())
+    if task not in {"regression", "classification"}:
+        raise ValueError("task must be regression or classification")
+    if len(prediction_frames) != len(bundles):
+        raise ValueError("Prediction frame count must match fold bundle count")
+    bundle_by_fold = {bundle.fold_ref: bundle for bundle in bundles}
+    if len(bundle_by_fold) != len(bundles):
+        raise ValueError("Fold bundle identities must be unique")
+    frame_by_fold = {frame.fold_ref: frame for frame in prediction_frames}
+    if len(frame_by_fold) != len(prediction_frames):
+        raise ValueError("Prediction fold identities must be unique")
+    if set(frame_by_fold) != set(bundle_by_fold):
+        raise ValueError("Prediction fold identities must match fold bundles")
+
+    actual_by_key: dict[tuple[str, datetime], float] = {}
+    predicted_by_key: dict[tuple[str, datetime], Any] = {}
+    for fold_ref, bundle in bundle_by_fold.items():
+        prediction = frame_by_fold[fold_ref]
+        expected_keys = {_sample_key_id(key) for key in bundle.evaluation_samples.keys}
+        frame_keys = [_sample_key_id(key) for key in prediction.keys]
+        if len(set(frame_keys)) != len(frame_keys):
+            raise ValueError(f"Prediction keys must be unique in fold {fold_ref}")
+        if set(frame_keys) != expected_keys:
+            raise ValueError(f"Predictions must cover every evaluation key exactly in fold {fold_ref}")
+        if task == "regression" and prediction.predictions.ndim != 1:
+            raise ValueError("Regression predictions must be one-dimensional")
+        if task == "classification" and prediction.predictions.ndim != 2:
+            raise ValueError("Classification predictions must have shape [N, 3]")
+        if any(key in predicted_by_key for key in frame_keys):
+            raise ValueError("Prediction keys must be unique across fold bundles")
+        predicted_by_key.update(zip(frame_keys, prediction.predictions))
+        target_values = bundle.scoring_targets.values
+        target_keys = [_sample_key_id(key) for key in bundle.scoring_keys]
+        if len(target_keys) != len(target_values):
+            raise ValueError(f"Scoring targets are misaligned in fold {fold_ref}")
+        if any(key in actual_by_key for key in target_keys):
+            raise ValueError("Scoring keys must be unique across fold bundles")
+        actual_by_key.update(zip(target_keys, target_values.tolist()))
+
+    scoring_order = [
+        _sample_key_id(key)
+        for bundle in bundles
+        for key in bundle.scoring_keys
+    ]
+    if len(set(scoring_order)) != len(scoring_order):
+        raise ValueError("Scoring keys must be unique across fold bundles")
+    if any(key not in predicted_by_key for key in scoring_order):
+        raise ValueError("A scoring key is missing its required prediction")
+    actual = [actual_by_key[key] for key in scoring_order]
+    predicted = [predicted_by_key[key] for key in scoring_order]
     if not actual:
-        return (MetricResult(name="predictive_loss", value=None, status="unavailable", reason="no scoreable samples"),)
+        names = ("log_loss", "accuracy") if task == "classification" else ("mse", "rmse", "mae", "improvement_over_zero")
+        return tuple(unavailable_metric(name, "no scoreable samples", n=0) for name in names)
     if task == "classification":
+        labels = np.asarray(actual, dtype=float)
+        if not np.isfinite(labels).all() or not np.equal(labels, labels.astype(int)).all() or not np.isin(labels, (-1, 0, 1)).all():
+            raise ValueError("Classification scoring targets must be integer labels in {-1, 0, +1}")
         return tuple(classification_metrics(actual, np.asarray(predicted)).values())
     return tuple(regression_metrics(actual, predicted).values())
+
+
+def _sample_key_id(key: SampleKey) -> tuple[str, datetime]:
+    return key.ticker, key.timestamp.astimezone(timezone.utc)
 
 
 def _write_prediction(
@@ -106,6 +160,20 @@ def _write_prediction(
                 }
             )
     return store.write_json(run_id, relative_path, records)
+
+
+def _write_scoring_targets(store: ArtifactStore, run_id: str, bundle: FoldBundle) -> dict[str, Any]:
+    """Persist keyed score labels and their fold coverage diagnostics."""
+    payload = {
+        "schema_version": "scoring-target-artifact.v1",
+        "fold_ref": bundle.fold_ref,
+        "targets": [
+            {"ticker": key.ticker, "timestamp": key.timestamp.isoformat(), "target": float(value)}
+            for key, value in zip(bundle.scoring_targets.keys, bundle.scoring_targets.values)
+        ],
+        "diagnostics": bundle.diagnostics.get("scoring", {}),
+    }
+    return store.write_json(run_id, f"scoring/fold-{bundle.fold_ref}.json", payload)
 
 
 def _combined_predictions(frames: tuple[PredictionFrame, ...]) -> list[tuple[SampleKey, np.ndarray]]:
@@ -130,6 +198,15 @@ def _strategy_result(
     return allocations, backtest
 
 
+def _statistical_backtest_returns(backtest: BacktestResult, *, frequency: str, calendar: str, gross: bool = False):
+    """Convert immutable native backtest returns to the configured evidence frequency."""
+    series = backtest.gross_returns if gross else backtest.net_returns
+    if series is None:
+        return None
+    timestamps = backtest.equity.get_column("timestamp").to_list()
+    return statistical_returns(timestamps, series.to_numpy(), frequency=frequency, calendar=calendar)
+
+
 def persist_run(
     *,
     store: ArtifactStore,
@@ -144,6 +221,7 @@ def persist_run(
     bundles: tuple[FoldBundle, ...] = (),
     candidate_status: list[dict[str, Any]] | None = None,
     candidate_predictions: dict[str, tuple[PredictionFrame, ...]] | None = None,
+    inherited_scoring_coverage: dict[str, Any] | None = None,
     parent_run_id: str | None = None,
     parent_model_ref: str | None = None,
 ) -> RunResult:
@@ -162,7 +240,8 @@ def persist_run(
         store.write_json(run_id, f"preprocessors/fold-{index}.json", bundle.preprocessor.state.model_dump(mode="json"))
         for index, bundle in enumerate(bundles)
     ]
-    records = [prediction_record, metrics_record, snapshot_record, snapshot_metadata, split_record, allocation_record, *preprocessor_records, *candidate_prediction_records]
+    scoring_records = [_write_scoring_targets(store, run_id, bundle) for bundle in bundles]
+    records = [prediction_record, metrics_record, snapshot_record, snapshot_metadata, split_record, allocation_record, *preprocessor_records, *scoring_records, *candidate_prediction_records]
     for model_dir in model_dirs:
         for name in ("manifest.json", "model.pkl"):
             path = store.run_dir(run_id) / model_dir / name
@@ -193,6 +272,8 @@ def persist_run(
     manifest = {
         "config": config.model_dump(mode="json"),
         "resolved_config": config.model_dump(mode="json"),
+        "config_schema_version": PIPELINE_CONFIG_SCHEMA_VERSION,
+        "config_source_provenance": config.source_provenance,
         "config_hash": config.resolved_config_hash,
         "snapshot_hash": dataset.snapshot.snapshot_hash,
         "split_hash": _split_hash(dataset),
@@ -201,6 +282,9 @@ def persist_run(
         "dependency_lock_hash": sha256_file("uv.lock") if Path("uv.lock").exists() else None,
         "seed": config.models.seed,
         "task": config.task.kind,
+        "return_convention": return_convention(config.statistics.frequency),
+        "statistics_frequency": config.statistics.frequency,
+        "statistics_calendar": dataset.snapshot.calendar,
         "model_bundles": model_dirs,
         "parent_model_ref": parent_model_ref,
         "preprocessor_bundles": [item["path"] for item in preprocessor_records],
@@ -209,6 +293,25 @@ def persist_run(
             for frame in predictions
             for key in frame.keys
         ],
+        "predicted_coverage": {
+            "status": "available",
+            "folds": {frame.fold_ref: len(frame.keys) for frame in predictions},
+            "total": sum(len(frame.keys) for frame in predictions),
+        },
+        "scored_coverage": (
+            {
+                "status": "available",
+                "folds": {bundle.fold_ref: len(bundle.scoring_keys) for bundle in bundles},
+                "total": sum(len(bundle.scoring_keys) for bundle in bundles),
+                "artifacts": [record["path"] for record in scoring_records],
+            }
+            if bundles else
+            {
+                "status": "inherited" if inherited_scoring_coverage else "not_recomputed",
+                "source_run_id": parent_run_id,
+                "coverage": inherited_scoring_coverage,
+            }
+        ),
         "candidates": candidate_status or [],
         "candidate_prediction_paths": {
             name: record["path"]
@@ -257,6 +360,8 @@ def run_experiment(
             "task": config.task.kind,
             "models": config.models.model_dump(mode="json"),
             "frequency": config.statistics.frequency,
+            "return_convention": return_convention(config.statistics.frequency),
+            "calendar": prepared.snapshot.calendar,
             "cost_treatment": "fees+slippage",
         },
     )
@@ -295,7 +400,7 @@ def run_experiment(
                     model.save(model_dir)
                     model_ref = str(model_dir.relative_to(store.run_dir(run_id)))
                     candidate_dirs.append(model_ref)
-                    prediction = predict_fold(model, bundle, model_ref=model_ref, fold_ref=str(len(candidate_dirs) - 1), task=config.task.kind)
+                    prediction = predict_fold(model, bundle, model_ref=model_ref, fold_ref=bundle.fold_ref, task=config.task.kind)
                     candidate_predictions.append(prediction)
                     platform = get_platform_config()
                     if platform.mlflow.enabled and tracking_mode == "immediate":
@@ -358,12 +463,19 @@ def run_experiment(
         allocations, backtest = _strategy_result(prepared, predictions, config, period_name="development")
         evidence_metrics = ()
         if backtest.net_returns is not None:
+            statistical_net = _statistical_backtest_returns(
+                backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar,
+            )
             evidence_metrics = tuple(sharpe_evidence_metrics(
-                backtest.net_returns.to_numpy(),
+                statistical_net.to_numpy(),
                 frequency=config.statistics.frequency,
                 min_observations=config.statistics.min_observations,
                 trial_sharpes=[],
             ).values())
+            convention = return_convention(config.statistics.frequency)
+            for metric in evidence_metrics:
+                metric.inputs.update({"return_convention": convention, "calendar": prepared.snapshot.calendar})
+                metric.conventions.update({"return_convention": convention, "calendar": prepared.snapshot.calendar})
             metrics = tuple(metrics) + evidence_metrics
         result = persist_run(
             store=store,
@@ -385,8 +497,16 @@ def run_experiment(
             result={
                 "run_id": run_id,
                 "logical_trial_id": logical_trial,
-                "development_net_returns": backtest.net_returns.to_list() if backtest.net_returns is not None else None,
-                "development_gross_returns": backtest.gross_returns.to_list() if backtest.gross_returns is not None else None,
+                "return_convention": return_convention(config.statistics.frequency),
+                "calendar": prepared.snapshot.calendar,
+                "development_net_returns": (
+                    _statistical_backtest_returns(backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar).to_list()
+                    if backtest.net_returns is not None else None
+                ),
+                "development_gross_returns": (
+                    _statistical_backtest_returns(backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar, gross=True).to_list()
+                    if backtest.gross_returns is not None else None
+                ),
             },
         )
         return result
@@ -404,6 +524,7 @@ def load_run(run_id: str, *, artifacts_dir: str | Path | None = None) -> RunResu
     manifest = store.load_manifest(run_id)
     for record in manifest.get("artifacts", []):
         store.verify_artifact(run_id, record)
+    load_scoring_targets(run_id, artifacts_dir=artifacts_dir)
     records = json.loads((store.run_dir(run_id) / "predictions.json").read_text())
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for record in records:
@@ -465,10 +586,38 @@ def _load_prediction_frames(store: ArtifactStore, run_id: str, relative_path: st
     return tuple(frames)
 
 
+def load_scoring_targets(
+    run_id: str, *, artifacts_dir: str | Path | None = None
+) -> dict[str, ScoringTargets]:
+    """Reload checksummed scoring labels by fold, preserving legacy runs without them."""
+    store = ArtifactStore(artifacts_dir or get_platform_config().paths.artifacts_dir)
+    manifest = store.load_manifest(run_id)
+    records = {record["path"]: record for record in manifest.get("artifacts", [])}
+    coverage = manifest.get("scored_coverage", {})
+    targets_by_fold: dict[str, ScoringTargets] = {}
+    for relative_path in coverage.get("artifacts", []):
+        record = records.get(relative_path)
+        if record is None:
+            raise ValueError(f"Scoring target artifact is not checksummed in the run manifest: {relative_path}")
+        path = store.verify_artifact(run_id, record)
+        artifact = json.loads(path.read_text())
+        fold_ref = artifact["fold_ref"]
+        if fold_ref in targets_by_fold:
+            raise ValueError(f"Duplicate scoring target artifact for fold {fold_ref}")
+        rows = artifact["targets"]
+        keys = tuple(SampleKey(ticker=row["ticker"], timestamp=row["timestamp"]) for row in rows)
+        values = np.asarray([row["target"] for row in rows], dtype=np.float32)
+        targets_by_fold[fold_ref] = ScoringTargets(keys=keys, values=values)
+    return targets_by_fold
+
+
 def load_candidate_predictions(run_id: str, model_name: str, *, artifacts_dir: str | Path | None = None) -> tuple[PredictionFrame, ...]:
     """Load a completed candidate's saved development predictions without retraining."""
     store = ArtifactStore(artifacts_dir or get_platform_config().paths.artifacts_dir)
     manifest = store.load_manifest(run_id)
+    for record in manifest.get("artifacts", []):
+        store.verify_artifact(run_id, record)
+    load_scoring_targets(run_id, artifacts_dir=artifacts_dir)
     candidate = next(
         (item for item in manifest.get("candidates", []) if item.get("model") == model_name and item.get("status") == "completed"),
         None,
@@ -486,27 +635,37 @@ def campaign_evidence(run_id: str, *, artifacts_dir: str | Path | None = None) -
     result = load_run(run_id, artifacts_dir=artifacts_dir)
     ledger = TrialLedger(Path(artifacts_dir or get_platform_config().paths.artifacts_dir) / "trials.sqlite")
     try:
+        frequency = result.artifact_manifest["config"]["statistics"]["frequency"]
+        calendar = result.snapshot.calendar if result.snapshot is not None else result.artifact_manifest["config"]["data"]["calendar"]
+        convention = return_convention(frequency)
         series = ledger.comparable_return_series(
             campaign=result.artifact_manifest["config"]["campaign"]["name"],
             snapshot_hash=result.ref.snapshot_hash,
             evaluation_hash=result.ref.split_hash,
-            frequency=result.artifact_manifest["config"]["statistics"]["frequency"],
+            frequency=frequency,
             cost_treatment="fees+slippage",
             task=result.artifact_manifest.get("task"),
+            return_convention=convention,
         )
         trial_sharpes = []
         for item in series["complete"]:
             try:
-                trial_sharpes.append(sharpe_statistics(item["returns"], min_observations=2)["sharpe"])
+                trial_sharpes.append(sharpe_statistics(item["returns"], frequency=frequency, min_observations=2)["sharpe"])
             except ValueError:
                 continue
-        current_returns = result.backtest.net_returns.to_numpy() if result.backtest is not None and result.backtest.net_returns is not None else []
+        current_returns = (
+            _statistical_backtest_returns(result.backtest, frequency=frequency, calendar=calendar).to_numpy()
+            if result.backtest is not None and result.backtest.net_returns is not None else []
+        )
         metrics = sharpe_evidence_metrics(
             current_returns,
             trial_sharpes=trial_sharpes,
-            frequency=result.artifact_manifest["config"]["statistics"]["frequency"],
+            frequency=frequency,
             min_observations=result.artifact_manifest["config"]["statistics"]["min_observations"],
         )
+        for metric in metrics.values():
+            metric.inputs.update({"return_convention": convention, "calendar": calendar})
+            metric.conventions.update({"return_convention": convention, "calendar": calendar})
         report = CampaignEvidenceReport(
             source_run_id=run_id,
             campaign=result.artifact_manifest["config"]["campaign"]["name"],
@@ -514,7 +673,9 @@ def campaign_evidence(run_id: str, *, artifacts_dir: str | Path | None = None) -
                 "snapshot_hash": result.ref.snapshot_hash,
                 "evaluation_hash": result.ref.split_hash,
                 "task": result.artifact_manifest.get("task"),
-                "frequency": result.artifact_manifest["config"]["statistics"]["frequency"],
+                "frequency": frequency,
+                "return_convention": convention,
+                "calendar": calendar,
                 "cost_treatment": "fees+slippage",
             },
             included_logical_trial_ids=tuple(item["logical_trial_id"] for item in series["complete"]),
@@ -551,7 +712,11 @@ def index_deferred_run(run_id: str, *, artifacts_dir: str | Path | None = None) 
         return {"status": "disabled", "run_id": run_id, "references": []}
     references: list[dict[str, str]] = []
     errors: list[str] = []
-    config = PipelineConfig.model_validate(result.artifact_manifest["config"])
+    config = PipelineConfig.from_artifact_config(
+        result.artifact_manifest["config"],
+        schema_version=result.artifact_manifest.get("config_schema_version"),
+        expected_hash=result.artifact_manifest.get("config_hash"),
+    )
     for candidate in result.artifact_manifest.get("candidates", []):
         model_name = candidate.get("model")
         if candidate.get("status") != "completed" or model_name not in {"baseline", "xgboost", "gru", "lstm"}:
@@ -614,14 +779,19 @@ def evaluate_holdout(
     result = load_run(run_id)
     if result.ref.parent_run_id is not None or not result.artifact_manifest.get("candidates"):
         raise ValueError("Holdout requires a completed, explicitly selected development run")
-    original = PipelineConfig(**result.artifact_manifest["config"])
+    original = PipelineConfig.from_artifact_config(
+        result.artifact_manifest["config"],
+        schema_version=result.artifact_manifest.get("config_schema_version"),
+        expected_hash=result.ref.config_hash,
+    )
     config = config or original
     if allocation_overrides or backtest_overrides:
         values = config.model_dump(mode="python")
         values["allocation"] = {**values["allocation"], **(allocation_overrides or {})}
         values["backtest"] = {**values["backtest"], **(backtest_overrides or {})}
         config = PipelineConfig(**values)
-    if config.resolved_config_hash != result.ref.config_hash and not (allocation_overrides or backtest_overrides):
+    legacy_hash_matches = config.source_provenance.get("legacy_artifact_config_hash") == result.ref.config_hash
+    if config.resolved_config_hash != result.ref.config_hash and not legacy_hash_matches and not (allocation_overrides or backtest_overrides):
         raise ValueError("Holdout configuration differs from the selected development run")
     if result.snapshot is None:
         raise ValueError("Selected run has no saved snapshot")
@@ -711,12 +881,32 @@ def evaluate_saved_predictions(
     parent = load_run(run_id)
     if parent.ref.parent_run_id is not None or parent.snapshot is None:
         raise ValueError("Strategy comparison requires a saved development run")
-    values = dict(parent.artifact_manifest["config"])
+    saved_config = PipelineConfig.from_artifact_config(
+        parent.artifact_manifest["config"],
+        schema_version=parent.artifact_manifest.get("config_schema_version"),
+        expected_hash=parent.ref.config_hash,
+    )
+    values = saved_config.model_dump(mode="python")
     values["allocation"] = {**values["allocation"], **(allocation_overrides or {})}
     values["backtest"] = {**values["backtest"], **(backtest_overrides or {})}
     config = PipelineConfig(**values)
     store = ArtifactStore(get_platform_config().paths.artifacts_dir)
+    selected_name = model_name or next(
+        (item.get("selected_model") for item in parent.artifact_manifest.get("candidates", []) if item.get("selected_model")),
+        None,
+    )
     selected_predictions = parent.predictions if model_name is None else load_candidate_predictions(run_id, model_name)
+    candidate_record = next(
+        (
+            item for item in parent.artifact_manifest.get("candidates", [])
+            if item.get("model") == selected_name and item.get("status") == "completed"
+        ),
+        None,
+    )
+    selected_metrics = (
+        tuple(MetricResult.model_validate(item) for item in candidate_record.get("metrics", []))
+        if candidate_record and candidate_record.get("metrics") else parent.metrics
+    )
     suffix = hashlib.sha256(json.dumps([model_name, allocation_overrides, backtest_overrides], sort_keys=True, default=str).encode()).hexdigest()[:12]
     child_id = f"{run_id}-child-{suffix}"
     if (store.run_dir(child_id) / "manifest.json").exists():
@@ -735,9 +925,10 @@ def evaluate_saved_predictions(
         allocations, backtest = _strategy_result(dataset, selected_predictions, config, period_name="development")
         result = persist_run(
             store=store, run_id=child_id, config=config, dataset=dataset,
-            predictions=selected_predictions, metrics=parent.metrics, model_dirs=[],
+            predictions=selected_predictions, metrics=selected_metrics, model_dirs=[],
             allocations=allocations, backtest=backtest,
-            parent_run_id=run_id, parent_model_ref=model_name or parent.ref.model_ref,
+            parent_run_id=run_id, parent_model_ref=selected_name or parent.ref.model_ref,
+            inherited_scoring_coverage=parent.artifact_manifest.get("scored_coverage"),
             candidate_status=[{"model": model_name or parent.ref.model_ref, "selection_source": "saved_development_predictions"}],
         )
         ledger.update_attempt(attempt, status="completed", result={"run_id": child_id, "logical_trial_id": logical})

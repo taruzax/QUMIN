@@ -62,6 +62,10 @@ def _execution_period(name: str, decision_times: tuple[datetime, ...], bars: pl.
 
 def build_split_plan(snapshot: MarketSnapshot | pl.DataFrame, splits_config: SplitsConfig) -> SplitPlan:
     """Build deterministic chronological, half-open train/validation/holdout folds."""
+    if splits_config.diagnostic_mode:
+        raise ValueError("diagnostic_mode=true is unsupported by the main walk-forward execution path")
+    if splits_config.embargo_bars > 0:
+        raise ValueError("embargo_bars>0 is unsupported by the main walk-forward execution path; use PurgedKFold directly")
     bars = _snapshot_bars(snapshot).sort(["ticker", "timestamp"])
     timestamps = _decision_timestamps(bars)
     n_timestamps = len(timestamps)

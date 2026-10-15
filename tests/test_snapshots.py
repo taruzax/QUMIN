@@ -60,7 +60,7 @@ def test_price_or_provenance_changes_snapshot_identity():
 
 def test_conflicting_duplicate_bars_are_rejected():
     left = _bars(("2024-01-02",))
-    right = left.with_columns(pl.lit(999.0).alias("close"))
+    right = left.with_columns(pl.lit(100.75).alias("close"))
     with pytest.raises(Exception, match="Conflicting duplicate"):
         consolidate_partitions([left, right], calendar="XNYS", timeframe=Timeframe.D1)
 

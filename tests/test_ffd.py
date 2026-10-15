@@ -3,7 +3,7 @@ import polars as pl
 from statsmodels.tsa.stattools import adfuller
 
 # pyrefly: ignore [missing-import]
-import lab.data.ffd as ffd_module
+import lab.quant.ffd as ffd_module
 
 # pyrefly: ignore [missing-import]
 from lab.data.ffd import (

@@ -35,3 +35,14 @@ def test_information_interval_excludes_overlap():
     )
     kept = purge_by_information_interval(samples, start.replace(day=3), start.replace(day=4))
     assert kept.height == 1
+
+
+def test_standalone_purged_kfold_still_applies_embargo_bars():
+    timestamps = list(range(10))
+    frame = pl.DataFrame({"timestamp": timestamps, "t1": timestamps})
+
+    without_embargo = list(PurgedKFold(n_splits=2).split(frame))[0][0]
+    with_embargo = list(PurgedKFold(n_splits=2, embargo_bars=1).split(frame))[0][0]
+
+    assert without_embargo.tolist() == [5, 6, 7, 8, 9]
+    assert with_embargo.tolist() == [6, 7, 8, 9]

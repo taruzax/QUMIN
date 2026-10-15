@@ -74,7 +74,7 @@ def test_barrier_volatility_scaling():
     df_low = _create_synthetic_series(low_vol_prices)
 
     vol_df = calculate_volatility(df_low, vol_lookback_bars=10, min_volatility=1e-5)
-    assert vol_df["volatility"].mean() < 0.01
+    assert vol_df["volatility_t_minus_1"].mean() < 0.01
 
 
 def test_barrier_short_group_skipped():

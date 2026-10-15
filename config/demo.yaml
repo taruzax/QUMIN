@@ -8,10 +8,18 @@ features:
   return_lags: [1, 5]
   target_horizons: [1, 5]
 
+task:
+  kind: regression
+
 tensor:
   sequence_len: 20
 
 models:
+  device: cpu
+  seed: 42
+  early_stopping: false
+  early_stopping_fraction: 0.20
+  early_stopping_patience: 5
   baseline:
     enabled: true
     params: {}
