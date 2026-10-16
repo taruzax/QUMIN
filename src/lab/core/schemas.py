@@ -77,7 +77,9 @@ def target_col(horizon: int) -> str:
     return f"target_{horizon}b"
 
 
-def validate_feature_names(feature_names: list[str] | tuple[str, ...], available_columns: set[str] | None = None) -> tuple[str, ...]:
+def validate_feature_names(
+    feature_names: list[str] | tuple[str, ...], available_columns: set[str] | None = None
+) -> tuple[str, ...]:
     names = tuple(feature_names)
     if not names:
         raise ValueError("At least one feature must be selected explicitly")

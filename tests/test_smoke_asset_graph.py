@@ -1,11 +1,7 @@
 def test_active_dagster_graph_contains_only_market_ingestion():
     from lab.platform.dagster import defs
 
-    asset_names = {
-        key.to_user_string()
-        for asset_definition in defs.assets
-        for key in asset_definition.keys
-    }
+    asset_names = {key.to_user_string() for asset_definition in defs.assets for key in asset_definition.keys}
     check_names = {spec.name for check in defs.asset_checks for spec in check.check_specs}
     schedule_names = {schedule.name for schedule in defs.schedules}
 

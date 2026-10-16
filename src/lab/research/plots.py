@@ -29,7 +29,10 @@ def plot_equity(equity: Any, *, title: str = "Equity"):
 
 
 def plot_drawdown(equity: Any, *, title: str = "Drawdown"):
-    values = np.asarray(equity["equity"] if hasattr(equity, "__getitem__") and not isinstance(equity, (list, tuple, np.ndarray)) else equity, dtype=float).reshape(-1)
+    values = np.asarray(
+        equity["equity"] if hasattr(equity, "__getitem__") and not isinstance(equity, (list, tuple, np.ndarray)) else equity,
+        dtype=float,
+    ).reshape(-1)
     running_max = np.maximum.accumulate(values)
     drawdown = values / running_max - 1.0
     figure, axis = plt.subplots(figsize=(8, 4))
@@ -94,9 +97,17 @@ def plot_learning_curves(training_history: Any, stopping_history: Any | None = N
     """Plot saved training and stopping curves without inventing missing history."""
     figure, axis = plt.subplots(figsize=(8, 4))
     if training_history:
-        axis.plot([row.get("epoch", row.get("round")) for row in training_history], [row["loss"] for row in training_history], label="train")
+        axis.plot(
+            [row.get("epoch", row.get("round")) for row in training_history],
+            [row["loss"] for row in training_history],
+            label="train",
+        )
     if stopping_history:
-        axis.plot([row.get("epoch", row.get("round")) for row in stopping_history], [row["loss"] for row in stopping_history], label="stopping")
+        axis.plot(
+            [row.get("epoch", row.get("round")) for row in stopping_history],
+            [row["loss"] for row in stopping_history],
+            label="stopping",
+        )
     axis.set_title("Learning curves")
     axis.set_xlabel("duration")
     axis.set_ylabel("loss")

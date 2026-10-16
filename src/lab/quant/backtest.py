@@ -28,7 +28,11 @@ def _period_bounds(evaluation_period: Any) -> tuple[datetime, datetime, datetime
     if hasattr(evaluation_period, "first_decision"):
         return evaluation_period.first_decision, evaluation_period.last_decision, evaluation_period.final_liquidation_open
     if isinstance(evaluation_period, dict):
-        return evaluation_period["first_decision"], evaluation_period["last_decision"], evaluation_period.get("final_liquidation_open")
+        return (
+            evaluation_period["first_decision"],
+            evaluation_period["last_decision"],
+            evaluation_period.get("final_liquidation_open"),
+        )
     if isinstance(evaluation_period, tuple) and len(evaluation_period) >= 2:
         return evaluation_period[0], evaluation_period[1], evaluation_period[2] if len(evaluation_period) > 2 else None
     raise TypeError("evaluation_period must provide first_decision, last_decision, and optional final_liquidation_open")
@@ -40,7 +44,11 @@ def _price_matrix(snapshot: MarketSnapshot, start: datetime, end: datetime) -> t
     if bars.is_empty():
         raise ValueError("Evaluation period contains no market bars")
     pandas = bars.select([time_column, "ticker", "open", "close"]).to_pandas()
-    close = pandas.pivot(index=time_column, columns="ticker", values="close").sort_index().reindex(columns=sorted(snapshot.ticker_order))
+    close = (
+        pandas.pivot(index=time_column, columns="ticker", values="close")
+        .sort_index()
+        .reindex(columns=sorted(snapshot.ticker_order))
+    )
     return close, bars
 
 
@@ -78,8 +86,7 @@ def _target_orders(
         execution_open = {
             ticker: price
             for ticker in tickers
-            if (price := open_prices.get((timestamp.to_pydatetime(), ticker))) is not None
-            and np.isfinite(price) and price > 0.0
+            if (price := open_prices.get((timestamp.to_pydatetime(), ticker))) is not None and np.isfinite(price) and price > 0.0
         }
         missing_held = [ticker for ticker in tickers if quantities[ticker] != 0.0 and ticker not in execution_open]
         for ticker in missing_held:
@@ -98,7 +105,8 @@ def _target_orders(
         gross_open = sum(abs(quantities[ticker] * execution_open[ticker]) for ticker in tickers if ticker in execution_open)
         needs_risk = gross_open > float(latest_policy["gross_limit"]) * equity + 1e-9 or any(
             abs(quantities[ticker] * execution_open[ticker]) > float(latest_policy["max_position_size"]) * equity + 1e-9
-            for ticker in tickers if ticker in execution_open
+            for ticker in tickers
+            if ticker in execution_open
         )
         # Terminal liquidation is an explicit event at the configured final open.
         is_liquidation = liquidation is not None and timestamp.to_pydatetime() == liquidation
@@ -127,7 +135,9 @@ def _target_orders(
                         target_quantity = direction * allocation.ticker_budgets.get(ticker, 0.0) * equity / execution_open[ticker]
                     else:
                         forecast = float(raw.reshape(-1)[0])
-                        direction = 1 if forecast > backtest_config.dead_zone else -1 if forecast < -backtest_config.dead_zone else 0
+                        direction = (
+                            1 if forecast > backtest_config.dead_zone else -1 if forecast < -backtest_config.dead_zone else 0
+                        )
                         target_quantity = direction * allocation.ticker_budgets.get(ticker, 0.0) * equity / execution_open[ticker]
                 target_quantities[ticker] = target_quantity
             if needs_risk:
@@ -153,7 +163,8 @@ def _target_orders(
                 if quantities[ticker] != 0.0 and np.sign(quantities[ticker]) == np.sign(target)
             )
             new_value = sum(
-                max(0.0, abs(target) - (abs(quantities[ticker]) if np.sign(quantities[ticker]) == np.sign(target) else 0.0)) * execution_open[ticker]
+                max(0.0, abs(target) - (abs(quantities[ticker]) if np.sign(quantities[ticker]) == np.sign(target) else 0.0))
+                * execution_open[ticker]
                 for ticker, target in target_quantities.items()
             )
             capacity = max(0.0, float(latest_policy["gross_limit"]) * equity - existing_value)
@@ -164,7 +175,9 @@ def _target_orders(
                     target_quantities[ticker] = target * entry_scale
                 elif abs(target) > abs(current):
                     target_quantities[ticker] = current + (target - current) * entry_scale
-                if current == 0.0 and 0.0 < abs(target_quantities[ticker] * execution_open[ticker]) / equity < float(latest_policy["min_position_size"]):
+                if current == 0.0 and 0.0 < abs(target_quantities[ticker] * execution_open[ticker]) / equity < float(
+                    latest_policy["min_position_size"]
+                ):
                     target_quantities[ticker] = 0.0
             ordered_orders = sorted(
                 (
@@ -240,7 +253,9 @@ def _target_orders(
                         "entry_index": close.index.get_loc(timestamp),
                         "entry_price": execution_price,
                         "direction": 1 if target_quantity > 0.0 else -1,
-                        "volatility": max(volatility if np.isfinite(volatility) else 0.0, task_config.triple_barrier.volatility_floor),
+                        "volatility": max(
+                            volatility if np.isfinite(volatility) else 0.0, task_config.triple_barrier.volatility_floor
+                        ),
                     }
                 if ticker in pending_exits:
                     active_events.pop(ticker, None)
@@ -268,15 +283,22 @@ def _target_orders(
                 quantities[ticker] = 0.0
                 order_rows.append(
                     {
-                        "timestamp": timestamp.to_pydatetime(), "ticker": ticker, "quantity": delta,
-                        "price": execution_price, "side": "buy" if delta > 0 else "sell",
-                        "reason": "terminal_liquidation", "fees": fee,
+                        "timestamp": timestamp.to_pydatetime(),
+                        "ticker": ticker,
+                        "quantity": delta,
+                        "price": execution_price,
+                        "side": "buy" if delta > 0 else "sell",
+                        "reason": "terminal_liquidation",
+                        "fees": fee,
                     }
                 )
                 event_rows.append(
                     {
-                        "timestamp": timestamp.to_pydatetime(), "ticker": ticker, "entry_quantity": 0.0,
-                        "entry_price": execution_price, "exit_reason": "terminal_liquidation",
+                        "timestamp": timestamp.to_pydatetime(),
+                        "ticker": ticker,
+                        "entry_quantity": 0.0,
+                        "entry_price": execution_price,
+                        "exit_reason": "terminal_liquidation",
                     }
                 )
             break
@@ -294,8 +316,10 @@ def _target_orders(
                 elif current_index - event["entry_index"] >= task_config.triple_barrier.expiry_bars:
                     pending_exits[ticker] = "expiry"
         blocked_entries.clear()
-    orders = pd.DataFrame(order_rows) if order_rows else pd.DataFrame(
-        columns=["timestamp", "ticker", "quantity", "price", "side", "reason", "fees"]
+    orders = (
+        pd.DataFrame(order_rows)
+        if order_rows
+        else pd.DataFrame(columns=["timestamp", "ticker", "quantity", "price", "side", "reason", "fees"])
     )
     return orders, event_rows
 
@@ -307,7 +331,8 @@ def _run_vectorbt(close: pd.DataFrame, orders: pd.DataFrame, config: BacktestCon
     prices = pd.DataFrame(np.nan, index=close.index, columns=close.columns)
     call_seq = pd.DataFrame(
         np.tile(np.arange(len(close.columns), dtype=np.int64), (len(close.index), 1)),
-        index=close.index, columns=close.columns,
+        index=close.index,
+        columns=close.columns,
     )
     for row in orders.itertuples(index=False):
         sizes.loc[row.timestamp, row.ticker] += float(row.quantity)
@@ -357,9 +382,14 @@ def simulate_strategy(
         liquidation=liquidation,
     )
     gross_orders, _ = _target_orders(
-        close, bars, allocation_tuple, prediction_map,
-        task_config=task_config, backtest_config=backtest_config,
-        fee_rate=0.0, liquidation=liquidation,
+        close,
+        bars,
+        allocation_tuple,
+        prediction_map,
+        task_config=task_config,
+        backtest_config=backtest_config,
+        fee_rate=0.0,
+        liquidation=liquidation,
     )
     nominal_frequency = "1D" if snapshot.timeframe == Timeframe.D1 else "1h"
     gross_pf = _run_vectorbt(close, gross_orders, backtest_config, fee_rate=0.0, freq=nominal_frequency)
@@ -405,13 +435,13 @@ def simulate_strategy(
             f"relative difference=1, requested notional={abs(float(request['quantity'] * request['price'])):.12g}, "
             f"executed notional=0, quantity tolerance=atol {quantity_atol:g} + rtol {quantity_rtol:g}"
         )
-    for order_index, (request, actual) in enumerate(zip(orders.itertuples(index=False), matched_records)):
+    reconciled_records = [actual for actual in matched_records if actual is not None]
+    for order_index, (request, actual) in enumerate(zip(orders.itertuples(index=False), reconciled_records)):
         executed_quantity = float(actual.Size) * (1.0 if str(actual.Side).lower() == "buy" else -1.0)
         requested_notional = abs(float(request.quantity) * float(request.price))
         executed_notional = abs(float(actual.Size) * float(actual.Price))
         quantity_difference = abs(float(request.quantity) - executed_quantity)
         relative_quantity_difference = quantity_difference / max(abs(float(request.quantity)), quantity_atol)
-        notional_difference = abs(requested_notional - executed_notional)
         quantity_matches = np.isclose(request.quantity, executed_quantity, rtol=quantity_rtol, atol=quantity_atol)
         notional_matches = np.isclose(requested_notional, executed_notional, rtol=notional_rtol, atol=notional_atol)
         if not quantity_matches or not notional_matches:
@@ -427,20 +457,42 @@ def simulate_strategy(
             )
     orders = orders.copy()
     if not orders.empty:
-        orders["price"] = [float(actual.Price) for actual in matched_records]
-        orders["fees"] = [float(actual.Fees) for actual in matched_records]
+        orders["price"] = [float(actual.Price) for actual in reconciled_records]
+        orders["fees"] = [float(actual.Fees) for actual in reconciled_records]
     values = pd.Series(net_pf.value(), index=close.index, name="equity")
     gross_values = pd.Series(gross_pf.value(), index=close.index, name="equity")
-    equity = pl.DataFrame({"timestamp": list(values.index.to_pydatetime()), "equity": values.to_numpy(), "gross_equity": gross_values.to_numpy()})
+    equity = pl.DataFrame(
+        {"timestamp": list(values.index.to_pydatetime()), "equity": values.to_numpy(), "gross_equity": gross_values.to_numpy()}
+    )
     net_returns = values.pct_change().fillna(0.0).to_numpy()
     gross_returns = gross_values.pct_change().fillna(0.0).to_numpy()
-    order_frame = pl.from_pandas(orders) if not orders.empty else pl.DataFrame(
-        schema={"timestamp": pl.Datetime("us", "UTC"), "ticker": pl.String, "quantity": pl.Float64,
-                "price": pl.Float64, "side": pl.String, "reason": pl.String, "fees": pl.Float64}
+    order_frame = (
+        pl.from_pandas(orders)
+        if not orders.empty
+        else pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "ticker": pl.String,
+                "quantity": pl.Float64,
+                "price": pl.Float64,
+                "side": pl.String,
+                "reason": pl.String,
+                "fees": pl.Float64,
+            }
+        )
     )
-    event_frame = pl.DataFrame(event_rows) if event_rows else pl.DataFrame(
-        schema={"timestamp": pl.Datetime("us", "UTC"), "ticker": pl.String,
-                "entry_quantity": pl.Float64, "entry_price": pl.Float64, "exit_reason": pl.String}
+    event_frame = (
+        pl.DataFrame(event_rows)
+        if event_rows
+        else pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "ticker": pl.String,
+                "entry_quantity": pl.Float64,
+                "entry_price": pl.Float64,
+                "exit_reason": pl.String,
+            }
+        )
     )
     exposure = pd.DataFrame(0.0, index=close.index, columns=close.columns)
     if not orders.empty:
@@ -448,7 +500,13 @@ def simulate_strategy(
             changes = orders.loc[orders["ticker"] == ticker].groupby("timestamp")["quantity"].sum()
             exposure[ticker] = changes.reindex(close.index, fill_value=0.0).cumsum()
     exposure_frame = pl.from_pandas(exposure.reset_index(names="timestamp"))
-    turnover = orders.groupby("timestamp")["quantity"].apply(lambda values: float(np.abs(values).sum())).reindex(close.index, fill_value=0.0) if not orders.empty else pd.Series(0.0, index=close.index)
+    turnover = (
+        orders.groupby("timestamp")["quantity"]
+        .apply(lambda values: float(np.abs(values).sum()))
+        .reindex(close.index, fill_value=0.0)
+        if not orders.empty
+        else pd.Series(0.0, index=close.index)
+    )
     return BacktestResult(
         orders=order_frame,
         trade_events=event_frame,
@@ -458,5 +516,9 @@ def simulate_strategy(
         exposure=exposure_frame,
         turnover=pl.Series("turnover", turnover.to_numpy()),
         period={"first_decision": start, "last_decision": end, "final_liquidation_open": liquidation},
-        diagnostics={"engine": "vectorbt", "gross_final_equity": float(gross_values.iloc[-1]), "net_final_equity": float(values.iloc[-1])},
+        diagnostics={
+            "engine": "vectorbt",
+            "gross_final_equity": float(gross_values.iloc[-1]),
+            "net_final_equity": float(values.iloc[-1]),
+        },
     )

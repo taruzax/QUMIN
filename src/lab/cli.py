@@ -21,7 +21,6 @@ from lab.research.experiment import (
     campaign_evidence,
     evaluate_holdout,
     evaluate_saved_predictions,
-    index_deferred_run,
     load_run,
     run_experiment,
 )
@@ -149,9 +148,9 @@ def _dispatch(args: argparse.Namespace) -> int:
             batch_store=ProviderBatchStore(platform.paths.snapshot_dir.parent / "market_batches"),
             catalog=SnapshotCatalog(platform.paths.snapshot_dir),
         )
-        result = service.execute(stream)
-        _emit(result.model_dump(mode="json"), as_json)
-        return 0 if result.status != "failed" else 1
+        ingest_result = service.execute(stream)
+        _emit(ingest_result.model_dump(mode="json"), as_json)
+        return 0 if ingest_result.status != "failed" else 1
     if args.command == "snapshot-list":
         _emit({"snapshots": [item.model_dump(mode="json") for item in SnapshotCatalog(args.root).list()]}, as_json)
         return 0
@@ -163,21 +162,53 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "prepare":
         config = PipelineConfig.from_yaml(args.config)
-        reference, dataset = prepare_and_store_dataset(config, store_root=args.store_root)
-        _emit({"dataset_id": reference.dataset_id, "snapshot_id": reference.snapshot_id, "snapshot_hash": reference.snapshot_hash, "rows": dataset.features.height, "bundle_path": reference.bundle_path}, as_json)
+        prepared_reference, dataset = prepare_and_store_dataset(config, store_root=args.store_root)
+        _emit(
+            {
+                "dataset_id": prepared_reference.dataset_id,
+                "snapshot_id": prepared_reference.snapshot_id,
+                "snapshot_hash": prepared_reference.snapshot_hash,
+                "rows": dataset.features.height,
+                "bundle_path": prepared_reference.bundle_path,
+            },
+            as_json,
+        )
         return 0
     if args.command == "dataset-inspect":
         store = DatasetStore(args.store_root)
-        reference = store.resolve(args.dataset_id)
-        store.verify(reference)
-        dataset = store.load(reference)
-        _emit({"dataset_id": reference.dataset_id, "snapshot_id": reference.snapshot_id, "features": dataset.feature_specification, "feature_rows": dataset.features.height, "label_rows": dataset.labels.height, "split_hash": reference.split_hash, "bundle_path": reference.bundle_path}, as_json)
+        inspected_reference = store.resolve(args.dataset_id)
+        store.verify(inspected_reference)
+        inspected_dataset = store.load(inspected_reference)
+        _emit(
+            {
+                "dataset_id": inspected_reference.dataset_id,
+                "snapshot_id": inspected_reference.snapshot_id,
+                "features": inspected_dataset.feature_specification,
+                "feature_rows": inspected_dataset.features.height,
+                "label_rows": inspected_dataset.labels.height,
+                "split_hash": inspected_reference.split_hash,
+                "bundle_path": inspected_reference.bundle_path,
+            },
+            as_json,
+        )
         return 0
     if args.command == "experiment":
         config = PipelineConfig.from_yaml(args.config)
-        reference = DatasetStore(get_platform_config().paths.artifacts_dir).resolve(args.dataset_id) if args.dataset_id else None
-        result = run_experiment(config, dataset_ref=reference)
-        _emit({"run_id": result.ref.run_id, "snapshot_hash": result.ref.snapshot_hash, "config_hash": result.ref.config_hash, "artifact_directory": str(Path(get_platform_config().paths.artifacts_dir) / "runs" / result.ref.run_id)}, as_json)
+        experiment_reference = (
+            DatasetStore(get_platform_config().paths.artifacts_dir).resolve(args.dataset_id) if args.dataset_id else None
+        )
+        experiment_result = run_experiment(config, dataset_ref=experiment_reference)
+        _emit(
+            {
+                "run_id": experiment_result.ref.run_id,
+                "snapshot_hash": experiment_result.ref.snapshot_hash,
+                "config_hash": experiment_result.ref.config_hash,
+                "artifact_directory": str(
+                    Path(get_platform_config().paths.artifacts_dir) / "runs" / experiment_result.ref.run_id
+                ),
+            },
+            as_json,
+        )
         return 0
     if args.command in {"campaign-plan", "campaign-run", "campaign-resume"}:
         config, plan = _campaign_plan(args.config, args.campaign)
@@ -185,46 +216,64 @@ def _dispatch(args: argparse.Namespace) -> int:
             _emit({**plan.model_dump(mode="json"), "plan_json": plan.canonical_json(), "side_effects": False}, as_json)
         else:
             results = execute_campaign(config, plan)
-            store = CampaignStore(get_platform_config().paths.artifacts_dir)
-            campaign_result = store.finalize(plan)
-            store.close()
-            _emit({
-                "campaign_id": plan.campaign_id,
-                "results": results,
-                "campaign_result": campaign_result.model_dump(mode="json") if campaign_result else None,
-            }, as_json)
+            campaign_store = CampaignStore(get_platform_config().paths.artifacts_dir)
+            campaign_result = campaign_store.finalize(plan)
+            campaign_store.close()
+            _emit(
+                {
+                    "campaign_id": plan.campaign_id,
+                    "results": results,
+                    "campaign_result": campaign_result.model_dump(mode="json") if campaign_result else None,
+                },
+                as_json,
+            )
         return 0
     if args.command == "campaign-status":
-        store = CampaignStore(get_platform_config().paths.artifacts_dir)
-        entries = store.entries(args.campaign_id)
-        store.close()
+        campaign_store = CampaignStore(get_platform_config().paths.artifacts_dir)
+        entries = campaign_store.entries(args.campaign_id)
+        campaign_store.close()
         _emit({"campaign_id": args.campaign_id, "entries": [item.model_dump(mode="json") for item in entries]}, as_json)
         return 0
     if args.command == "backtest":
-        result = evaluate_saved_predictions(
+        backtest_result = evaluate_saved_predictions(
             args.run_id,
             _load_overrides(args.allocation),
             _load_overrides(args.backtest_config),
             model_name=args.model,
         )
-        _emit({"run_id": result.ref.run_id, "parent_run_id": result.ref.parent_run_id, "artifact_directory": str(Path(get_platform_config().paths.artifacts_dir) / "runs" / result.ref.run_id)}, as_json)
+        _emit(
+            {
+                "run_id": backtest_result.ref.run_id,
+                "parent_run_id": backtest_result.ref.parent_run_id,
+                "artifact_directory": str(Path(get_platform_config().paths.artifacts_dir) / "runs" / backtest_result.ref.run_id),
+            },
+            as_json,
+        )
         return 0
     if args.command == "report":
         if args.output.exists():
             raise FileExistsError(f"Report output already exists; choose a new path to preserve prior reports: {args.output}")
         config = PipelineConfig.from_yaml(args.config)
-        result = load_run(args.run_id)
+        report_result = load_run(args.run_id)
         evidence = campaign_evidence(args.run_id)
-        output = generate_run_report(args.output, result=result, config=config, evidence=evidence)
+        output = generate_run_report(args.output, result=report_result, config=config, evidence=evidence)
         run_dir = Path(get_platform_config().paths.artifacts_dir) / "runs" / args.run_id
         locator = ReportStore(get_platform_config().paths.artifacts_dir).write_locator(
             report_path=output,
             run_id=args.run_id,
             manifest_path=run_dir / "manifest.json",
             evidence=evidence.get("evidence_sidecar"),
-            report_type="holdout" if result.ref.parent_run_id else "development",
+            report_type="holdout" if report_result.ref.parent_run_id else "development",
         )
-        _emit({"report_id": locator["report_id"], "report_path": str(output.resolve()), "locator_path": locator["locator_path"], "evidence_sidecar": evidence.get("evidence_sidecar")}, as_json)
+        _emit(
+            {
+                "report_id": locator["report_id"],
+                "report_path": str(output.resolve()),
+                "locator_path": locator["locator_path"],
+                "evidence_sidecar": evidence.get("evidence_sidecar"),
+            },
+            as_json,
+        )
         return 0
     if args.command == "report-inspect":
         _emit(ReportStore(args.store_root).load_locator(args.report_id), as_json)
@@ -233,12 +282,22 @@ def _dispatch(args: argparse.Namespace) -> int:
         config = PipelineConfig.from_yaml(args.config)
         if args.store_dataset:
             reference, dataset = prepare_and_store_dataset(config, store_root=get_platform_config().paths.artifacts_dir)
-            result = run_experiment(config, dataset=dataset)
+            development_result = run_experiment(config, dataset=dataset)
             dataset_id = reference.dataset_id
         else:
-            result = run_experiment(config)
+            development_result = run_experiment(config)
             dataset_id = None
-        _emit({"run_id": result.ref.run_id, "dataset_id": dataset_id, "holdout_evaluated": False, "artifact_directory": str(Path(get_platform_config().paths.artifacts_dir) / "runs" / result.ref.run_id)}, as_json)
+        _emit(
+            {
+                "run_id": development_result.ref.run_id,
+                "dataset_id": dataset_id,
+                "holdout_evaluated": False,
+                "artifact_directory": str(
+                    Path(get_platform_config().paths.artifacts_dir) / "runs" / development_result.ref.run_id
+                ),
+            },
+            as_json,
+        )
         return 0
     if args.command == "holdout":
         if not args.acknowledge_holdout:
@@ -246,10 +305,14 @@ def _dispatch(args: argparse.Namespace) -> int:
         parent = load_run(args.run_id)
         if parent.ref.parent_run_id is not None:
             raise ValueError("Holdout requires a completed development run ID")
-        completed = {item["model"] for item in parent.artifact_manifest.get("candidates", []) if item.get("status") == "completed"}
+        completed = {
+            item["model"] for item in parent.artifact_manifest.get("candidates", []) if item.get("status") == "completed"
+        }
         if args.model not in completed:
             raise ValueError(f"Selected model is not a completed candidate in the development run: {args.model}")
-        result = evaluate_holdout(parent, config=PipelineConfig.from_yaml(args.config), model_name=args.model)
-        _emit({"run_id": result.ref.run_id, "parent_run_id": result.ref.parent_run_id, "model": args.model}, as_json)
+        holdout_result = evaluate_holdout(parent, config=PipelineConfig.from_yaml(args.config), model_name=args.model)
+        _emit(
+            {"run_id": holdout_result.ref.run_id, "parent_run_id": holdout_result.ref.parent_run_id, "model": args.model}, as_json
+        )
         return 0
     return 2

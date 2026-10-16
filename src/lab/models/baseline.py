@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -75,4 +75,4 @@ class EmpiricalPriorBaseline(BaseModel):
 
     def predict(self, X: Any) -> np.ndarray:
         probabilities = self.predict_proba(X)
-        return self.classes[np.argmax(probabilities, axis=1)]
+        return cast(np.ndarray, self.classes[np.argmax(probabilities, axis=1)])

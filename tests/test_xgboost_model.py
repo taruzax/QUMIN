@@ -1,16 +1,16 @@
-import numpy as np
 import os
 import signal
 import subprocess
 import sys
 from contextlib import contextmanager
 
+import numpy as np
 import pytest
 import torch
 
+import lab.models.xgboost_model as xgboost_module
 from lab.core.contracts import WindowSet
 from lab.models.registry import create_model
-import lab.models.xgboost_model as xgboost_module
 from lab.models.xgboost_model import XGBoostModel
 
 
@@ -201,8 +201,12 @@ print('DIRECT_NATIVE_INTERLEAVING_OK')
     environment.pop("OMP_NUM_THREADS", None)
     try:
         result = subprocess.run(
-            [sys.executable, "-c", script], capture_output=True, text=True,
-            timeout=180, check=False, env=environment,
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+            env=environment,
         )
     except subprocess.TimeoutExpired as exc:
         raise AssertionError(
@@ -211,8 +215,7 @@ print('DIRECT_NATIVE_INTERLEAVING_OK')
 
     signal_name = signal.Signals(-result.returncode).name if result.returncode < 0 else None
     assert result.returncode == 0, (
-        f"exit_code={result.returncode}, signal={signal_name}\n"
-        f"stdout={result.stdout}\nstderr={result.stderr}"
+        f"exit_code={result.returncode}, signal={signal_name}\nstdout={result.stdout}\nstderr={result.stderr}"
     )
     assert "DIRECT_NATIVE_INTERLEAVING_OK" in result.stdout
     assert "NATIVE_ENVIRONMENT=" in result.stdout
@@ -296,8 +299,12 @@ print('CAMPAIGN_WORKER_NATIVE_INTERLEAVING_OK')
     environment.pop("OMP_NUM_THREADS", None)
     try:
         result = subprocess.run(
-            [sys.executable, "-c", script], capture_output=True, text=True,
-            timeout=180, check=False, env=environment,
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+            env=environment,
         )
     except subprocess.TimeoutExpired as exc:
         raise AssertionError(
@@ -306,8 +313,7 @@ print('CAMPAIGN_WORKER_NATIVE_INTERLEAVING_OK')
 
     signal_name = signal.Signals(-result.returncode).name if result.returncode < 0 else None
     assert result.returncode == 0, (
-        f"exit_code={result.returncode}, signal={signal_name}\n"
-        f"stdout={result.stdout}\nstderr={result.stderr}"
+        f"exit_code={result.returncode}, signal={signal_name}\nstdout={result.stdout}\nstderr={result.stderr}"
     )
     assert "NATIVE_ENVIRONMENT=" in result.stdout
     assert "CAMPAIGN_CALLBACK_NATIVE_OPERATIONS_OK" in result.stdout
@@ -329,10 +335,19 @@ assert np.isfinite(predictions).all()
 print('CUDA_XGBOOST_SMOKE_OK')
 """
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120, check=False,
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     output = f"{result.stdout}\n{result.stderr}".lower()
-    unsupported = ("not compiled with gpu", "no visible gpu", "cuda driver version is insufficient", "cuda support is not enabled")
+    unsupported = (
+        "not compiled with gpu",
+        "no visible gpu",
+        "cuda driver version is insufficient",
+        "cuda support is not enabled",
+    )
     if result.returncode != 0 and any(message in output for message in unsupported):
         pytest.skip(f"Installed XGBoost build cannot train on the available CUDA device: {output[-1200:]}")
     assert result.returncode == 0, output[-3000:]

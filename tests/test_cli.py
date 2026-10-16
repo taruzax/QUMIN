@@ -3,7 +3,23 @@ from lab.cli import build_parser, main
 
 def test_cli_parser_exposes_stable_stage_commands():
     parser = build_parser()
-    for command in ("ingest", "snapshot-list", "snapshot-inspect", "prepare", "dataset-inspect", "experiment", "campaign-plan", "campaign-run", "campaign-resume", "campaign-status", "backtest", "report", "report-inspect", "development", "holdout"):
+    for command in (
+        "ingest",
+        "snapshot-list",
+        "snapshot-inspect",
+        "prepare",
+        "dataset-inspect",
+        "experiment",
+        "campaign-plan",
+        "campaign-run",
+        "campaign-resume",
+        "campaign-status",
+        "backtest",
+        "report",
+        "report-inspect",
+        "development",
+        "holdout",
+    ):
         assert command in parser._subparsers._group_actions[0].choices
 
 

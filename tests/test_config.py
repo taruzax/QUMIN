@@ -171,7 +171,12 @@ def test_saved_effective_config_reconstruction_ignores_new_environment(tmp_path,
 
 @pytest.mark.parametrize(
     "section,key",
-    [("data", "raw_data_dir"), ("data", "processed_data_dir"), ("validation", "require_timezone"), ("tensor", "train_cutoff_date")],
+    [
+        ("data", "raw_data_dir"),
+        ("data", "processed_data_dir"),
+        ("validation", "require_timezone"),
+        ("tensor", "train_cutoff_date"),
+    ],
 )
 def test_new_configs_reject_retired_noop_settings(section, key):
     with pytest.raises(ValueError):
@@ -195,6 +200,9 @@ def test_historical_config_migration_is_explicit_and_versioned():
     assert restored.data.source == "local"
     assert "train_cutoff_date" not in restored.model_dump()["tensor"]
     assert restored.source_provenance["migrated_legacy_fields"] == [
-        "data.processed_data_dir", "data.raw_data_dir", "tensor.train_cutoff_date", "validation.require_timezone",
+        "data.processed_data_dir",
+        "data.raw_data_dir",
+        "tensor.train_cutoff_date",
+        "validation.require_timezone",
     ]
     assert restored.source_provenance["legacy_artifact_config_hash"] == "old-hash"

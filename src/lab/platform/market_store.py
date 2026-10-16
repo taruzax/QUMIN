@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import os
@@ -10,7 +11,7 @@ import sqlite3
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import polars as pl
 
@@ -180,7 +181,8 @@ class SnapshotCatalog:
                 )"""
             )
             self.connection.execute(
-                "CREATE TABLE IF NOT EXISTS ingestion_attempts (attempt_id TEXT PRIMARY KEY, stream_id TEXT NOT NULL, status TEXT NOT NULL, finished_at TEXT NOT NULL, payload_json TEXT NOT NULL)"
+                "CREATE TABLE IF NOT EXISTS ingestion_attempts (attempt_id TEXT PRIMARY KEY, stream_id TEXT NOT NULL, "
+                "status TEXT NOT NULL, finished_at TEXT NOT NULL, payload_json TEXT NOT NULL)"
             )
             self.connection.commit()
             self._recover_catalog()
@@ -244,10 +246,10 @@ class SnapshotCatalog:
             calendar=snapshot.calendar,
             timeframe=snapshot.timeframe,
             ticker_order=snapshot.ticker_order,
-            first_completed_bar=first_bar,
-            last_completed_bar=last_bar,
+            first_completed_bar=cast(datetime, first_bar),
+            last_completed_bar=cast(datetime, last_bar),
             published_at=now,
-            coverage_status=coverage_status,
+            coverage_status=cast(Literal["accepted", "rejected", "incomplete"], coverage_status),
             batch_ids=selected_batch_ids,
             bundle_path=str(snapshot_dir),
             manifest_checksum="pending",
@@ -315,7 +317,9 @@ class SnapshotCatalog:
 
     def resolve(self, snapshot_id: str) -> SnapshotCatalogEntry:
         row = self.connection.execute(
-            "SELECT snapshot_id, snapshot_hash, stream_id, provider, calendar, timeframe, ticker_order_json, first_completed_bar, last_completed_bar, published_at, coverage_status, batch_ids_json, bundle_path, manifest_checksum FROM snapshots WHERE snapshot_id=?",
+            "SELECT snapshot_id, snapshot_hash, stream_id, provider, calendar, timeframe, ticker_order_json, "
+            "first_completed_bar, last_completed_bar, published_at, coverage_status, batch_ids_json, bundle_path, "
+            "manifest_checksum FROM snapshots WHERE snapshot_id=?",
             (snapshot_id,),
         ).fetchone()
         if row is None:
@@ -386,7 +390,7 @@ class SnapshotCatalog:
                 ),
             )
 
-    def attempts(self, stream_id: str | None = None) -> list[IngestionAttemptSummary]:
+    def attempts(self, stream_id: str | None = None) -> builtins.list[IngestionAttemptSummary]:
         if stream_id is None:
             rows = self.connection.execute(
                 "SELECT payload_json FROM ingestion_attempts ORDER BY finished_at, attempt_id"

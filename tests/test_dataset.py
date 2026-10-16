@@ -44,9 +44,7 @@ def test_nonfinite_feature_rows_exclude_every_window_that_touches_them():
 
     samples = build_sample_set(frame, ["close"], 2)
 
-    np.testing.assert_array_equal(
-        samples.X.to_numpy(), np.asarray([[[1.0], [2.0]], [[4.0], [5.0]]], dtype=np.float32)
-    )
+    np.testing.assert_array_equal(samples.X.to_numpy(), np.asarray([[[1.0], [2.0]], [[4.0], [5.0]]], dtype=np.float32))
     assert [key.timestamp.day for key in samples.keys] == [2, 5]
 
 
@@ -64,7 +62,12 @@ def test_allowed_decisions_and_label_join_exclude_unlabeled_endpoints():
     allowed = {("AAA", frame["timestamp"][2]), ("AAA", frame["timestamp"][3]), ("AAA", frame["timestamp"][4])}
 
     samples = build_sample_set(
-        frame, ["close"], 2, labels=labels, allowed_decisions=allowed, target_name="target",
+        frame,
+        ["close"],
+        2,
+        labels=labels,
+        allowed_decisions=allowed,
+        target_name="target",
     )
 
     assert [key.timestamp.day for key in samples.keys] == [3, 5]
@@ -89,9 +92,7 @@ def test_empty_and_target_free_results_remain_lazy():
 
 def test_supervised_windows_require_explicit_t1():
     frame = _frame("AAA", [1, 2, 3])
-    labels = pl.DataFrame(
-        {"ticker": ["AAA"], "decision_time": [frame["timestamp"][2]], "target": [1.0]}
-    )
+    labels = pl.DataFrame({"ticker": ["AAA"], "decision_time": [frame["timestamp"][2]], "target": [1.0]})
 
     with pytest.raises(ValueError, match="t1"):
         build_sample_set(frame, ["close"], 3, labels=labels, target_name="target")

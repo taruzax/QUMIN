@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, cast
 
 import exchange_calendars as xcals
 import pandas as pd
@@ -21,7 +21,7 @@ def as_utc(value: datetime | str | pd.Timestamp, *, timezone_name: str | None = 
         if timezone_name is None:
             raise ValueError("Ambiguous timestamp: supply a timezone or explicit UTC offset")
         timestamp = timestamp.tz_localize(timezone_name)
-    return timestamp.tz_convert("UTC").to_pydatetime()
+    return cast(datetime, timestamp.tz_convert("UTC").to_pydatetime())
 
 
 def session_schedule(calendar_name: str, session: str | datetime | pd.Timestamp) -> tuple[datetime, datetime, str]:

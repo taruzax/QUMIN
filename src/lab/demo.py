@@ -21,11 +21,7 @@ def _selected_model(candidate_status: list[dict[str, Any]]) -> str:
     if not isinstance(selected, str):
         raise RuntimeError("Demo development run did not record a selected model")
     candidate = next(
-        (
-            item
-            for item in candidate_status
-            if item.get("model") == selected and item.get("status") == "completed"
-        ),
+        (item for item in candidate_status if item.get("model") == selected and item.get("status") == "completed"),
         None,
     )
     if candidate is None:
@@ -53,7 +49,10 @@ def run_demo(config_path: str | Path = "config/demo.yaml", *, timeframe: str | N
             input_path.parent.mkdir(parents=True, exist_ok=True)
             generate_demo_bars(timeframe=selected_timeframe).write_csv(input_path)
             metadata_path.write_text(yaml.safe_dump(demo_metadata(timeframe=selected_timeframe), sort_keys=False))
-            config = PipelineConfig.from_yaml(Path(config_path), overrides={"data": {"timeframe": "1h", "input_path": input_path, "metadata_path": metadata_path}})
+            config = PipelineConfig.from_yaml(
+                Path(config_path),
+                overrides={"data": {"timeframe": "1h", "input_path": input_path, "metadata_path": metadata_path}},
+            )
     development = run_experiment(config)
     _require_backtest(development, "development")
     selected_model = _selected_model(development.artifact_manifest.get("candidates", []))

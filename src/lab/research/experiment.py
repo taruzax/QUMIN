@@ -14,17 +14,40 @@ import numpy as np
 import polars as pl
 
 from lab.core.config import PIPELINE_CONFIG_SCHEMA_VERSION, PipelineConfig, get_platform_config
-from lab.core.contracts import AllocationFrame, BacktestResult, CampaignEvidenceReport, FoldBundle, FoldSpec, MarketSnapshot, MetricResult, PredictionFrame, PreparedDataset, PreparedDatasetRef, RunRef, RunResult, SampleKey, ScoringTargets
+from lab.core.contracts import (
+    AllocationFrame,
+    BacktestResult,
+    CampaignEvidenceReport,
+    FoldBundle,
+    FoldSpec,
+    MarketSnapshot,
+    MetricResult,
+    PredictionFrame,
+    PreparedDataset,
+    PreparedDatasetRef,
+    RunRef,
+    RunResult,
+    SampleKey,
+    ScoringTargets,
+)
 from lab.models.registry import create_model
 from lab.platform.artifacts import ArtifactStore, sha256_file
 from lab.platform.evidence_store import EvidenceStore
 from lab.platform.mlflow_adapter import log_local_model
 from lab.quant.backtest import simulate_strategy
-from lab.quant.metrics import classification_metrics, regression_metrics, return_convention, sharpe_evidence_metrics, sharpe_statistics, statistical_returns, unavailable_metric
-from lab.research.preprocessing import prepare_dataset, prepare_fold
+from lab.quant.metrics import (
+    classification_metrics,
+    regression_metrics,
+    return_convention,
+    sharpe_evidence_metrics,
+    sharpe_statistics,
+    statistical_returns,
+    unavailable_metric,
+)
 from lab.research.portfolio import build_allocations
-from lab.research.trial_ledger import TrialLedger
+from lab.research.preprocessing import prepare_dataset, prepare_fold
 from lab.research.training import train_candidate
+from lab.research.trial_ledger import TrialLedger
 
 
 @dataclass(frozen=True)
@@ -45,7 +68,9 @@ def _code_identity() -> tuple[str, str]:
     revision = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=normal"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if revision.returncode != 0 or status.returncode != 0:
         return "unknown", "unknown"
@@ -76,7 +101,9 @@ def predict_fold(model: Any, bundle: FoldBundle, *, model_ref: str, fold_ref: st
     return PredictionFrame(keys=bundle.evaluation_samples.keys, model_ref=model_ref, fold_ref=fold_ref, predictions=predictions)
 
 
-def evaluate_predictions(prediction_frames: tuple[PredictionFrame, ...], bundles: tuple[FoldBundle, ...], *, task: str) -> tuple[MetricResult, ...]:
+def evaluate_predictions(
+    prediction_frames: tuple[PredictionFrame, ...], bundles: tuple[FoldBundle, ...], *, task: str
+) -> tuple[MetricResult, ...]:
     if task not in {"regression", "classification"}:
         raise ValueError("task must be regression or classification")
     if len(prediction_frames) != len(bundles):
@@ -115,11 +142,7 @@ def evaluate_predictions(prediction_frames: tuple[PredictionFrame, ...], bundles
             raise ValueError("Scoring keys must be unique across fold bundles")
         actual_by_key.update(zip(target_keys, target_values.tolist()))
 
-    scoring_order = [
-        _sample_key_id(key)
-        for bundle in bundles
-        for key in bundle.scoring_keys
-    ]
+    scoring_order = [_sample_key_id(key) for bundle in bundles for key in bundle.scoring_keys]
     if len(set(scoring_order)) != len(scoring_order):
         raise ValueError("Scoring keys must be unique across fold bundles")
     if any(key not in predicted_by_key for key in scoring_order):
@@ -131,7 +154,11 @@ def evaluate_predictions(prediction_frames: tuple[PredictionFrame, ...], bundles
         return tuple(unavailable_metric(name, "no scoreable samples", n=0) for name in names)
     if task == "classification":
         labels = np.asarray(actual, dtype=float)
-        if not np.isfinite(labels).all() or not np.equal(labels, labels.astype(int)).all() or not np.isin(labels, (-1, 0, 1)).all():
+        if (
+            not np.isfinite(labels).all()
+            or not np.equal(labels, labels.astype(int)).all()
+            or not np.isin(labels, (-1, 0, 1)).all()
+        ):
             raise ValueError("Classification scoring targets must be integer labels in {-1, 0, +1}")
         return tuple(classification_metrics(actual, np.asarray(predicted)).values())
     return tuple(regression_metrics(actual, predicted).values())
@@ -189,8 +216,11 @@ def _strategy_result(
 ) -> tuple[tuple[AllocationFrame, ...], BacktestResult]:
     rows = _combined_predictions(predictions)
     allocations = build_allocations(
-        dataset.snapshot, rows, config.allocation,
-        task=config.task.kind, backtest_config=config.backtest,
+        dataset.snapshot,
+        rows,
+        config.allocation,
+        task=config.task.kind,
+        backtest_config=config.backtest,
         config_hash=config.resolved_config_hash,
     )
     period = next(item for item in dataset.split_plan.execution_periods if item.name == period_name)
@@ -233,7 +263,9 @@ def persist_run(
         )
     metrics_record = store.write_json(run_id, "metrics.json", [metric.model_dump(mode="json") for metric in metrics])
     snapshot_record = store.write_parquet(run_id, "snapshot/bars.parquet", dataset.snapshot.bars)
-    snapshot_metadata = store.write_json(run_id, "snapshot/metadata.json", dataset.snapshot.model_dump(mode="json", exclude={"bars"}))
+    snapshot_metadata = store.write_json(
+        run_id, "snapshot/metadata.json", dataset.snapshot.model_dump(mode="json", exclude={"bars"})
+    )
     split_record = store.write_json(run_id, "split.json", dataset.split_plan.model_dump(mode="json"))
     allocation_record = store.write_json(run_id, "allocations.json", [item.model_dump(mode="json") for item in allocations])
     preprocessor_records = [
@@ -241,13 +273,25 @@ def persist_run(
         for index, bundle in enumerate(bundles)
     ]
     scoring_records = [_write_scoring_targets(store, run_id, bundle) for bundle in bundles]
-    records = [prediction_record, metrics_record, snapshot_record, snapshot_metadata, split_record, allocation_record, *preprocessor_records, *scoring_records, *candidate_prediction_records]
+    records = [
+        prediction_record,
+        metrics_record,
+        snapshot_record,
+        snapshot_metadata,
+        split_record,
+        allocation_record,
+        *preprocessor_records,
+        *scoring_records,
+        *candidate_prediction_records,
+    ]
     for model_dir in model_dirs:
         for name in ("manifest.json", "model.pkl"):
             path = store.run_dir(run_id) / model_dir / name
             if not path.exists():
                 raise FileNotFoundError(f"Incomplete local model bundle: {path}")
-            records.append({"path": str(path.relative_to(store.run_dir(run_id))), "bytes": path.stat().st_size, "sha256": sha256_file(path)})
+            records.append(
+                {"path": str(path.relative_to(store.run_dir(run_id))), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+            )
     backtest_paths: list[str] = []
     if backtest is not None:
         for name in ("orders", "trade_events", "equity", "exposure"):
@@ -257,7 +301,8 @@ def persist_run(
                 records.append(record)
                 backtest_paths.append(record["path"])
         series_record = store.write_json(
-            run_id, "backtest/series.json",
+            run_id,
+            "backtest/series.json",
             {
                 "gross_returns": backtest.gross_returns.to_list() if backtest.gross_returns is not None else None,
                 "net_returns": backtest.net_returns.to_list() if backtest.net_returns is not None else None,
@@ -289,9 +334,7 @@ def persist_run(
         "parent_model_ref": parent_model_ref,
         "preprocessor_bundles": [item["path"] for item in preprocessor_records],
         "prediction_keys": [
-            {"ticker": key.ticker, "timestamp": key.timestamp.isoformat()}
-            for frame in predictions
-            for key in frame.keys
+            {"ticker": key.ticker, "timestamp": key.timestamp.isoformat()} for frame in predictions for key in frame.keys
         ],
         "predicted_coverage": {
             "status": "available",
@@ -305,8 +348,8 @@ def persist_run(
                 "total": sum(len(bundle.scoring_keys) for bundle in bundles),
                 "artifacts": [record["path"] for record in scoring_records],
             }
-            if bundles else
-            {
+            if bundles
+            else {
                 "status": "inherited" if inherited_scoring_coverage else "not_recomputed",
                 "source_run_id": parent_run_id,
                 "coverage": inherited_scoring_coverage,
@@ -314,8 +357,7 @@ def persist_run(
         ),
         "candidates": candidate_status or [],
         "candidate_prediction_paths": {
-            name: record["path"]
-            for name, record in zip((candidate_predictions or {}).keys(), candidate_prediction_records)
+            name: record["path"] for name, record in zip((candidate_predictions or {}).keys(), candidate_prediction_records)
         },
         "allocation_paths": [allocation_record["path"]],
         "backtest_paths": backtest_paths,
@@ -332,7 +374,15 @@ def persist_run(
         model_ref=model_dirs[0] if model_dirs else parent_model_ref or "baseline",
         parent_run_id=parent_run_id,
     )
-    return RunResult(ref=ref, predictions=predictions, allocations=allocations, metrics=metrics, backtest=backtest, snapshot=dataset.snapshot, artifact_manifest=manifest)
+    return RunResult(
+        ref=ref,
+        predictions=predictions,
+        allocations=allocations,
+        metrics=metrics,
+        backtest=backtest,
+        snapshot=dataset.snapshot,
+        artifact_manifest=manifest,
+    )
 
 
 def run_experiment(
@@ -407,7 +457,8 @@ def run_experiment(
                         fold_metrics = evaluate_predictions((prediction,), (bundle,), task=config.task.kind)
                         tracking_refs.append(
                             log_local_model(
-                                model, artifact_path=f"{model_name}-fold-{len(candidate_dirs) - 1}",
+                                model,
+                                artifact_path=f"{model_name}-fold-{len(candidate_dirs) - 1}",
                                 model_dir=model_dir,
                                 tracking_uri=platform.paths.mlflow_tracking_uri,
                                 experiment_name=platform.mlflow.experiment_name,
@@ -421,12 +472,20 @@ def run_experiment(
                                     "fold": len(candidate_dirs) - 1,
                                     "model_bundle": model_ref,
                                 },
-                                metrics={item.name: item.value for item in fold_metrics if item.status == "available" and item.value is not None},
+                                metrics={
+                                    item.name: item.value
+                                    for item in fold_metrics
+                                    if item.status == "available" and item.value is not None
+                                },
                             )
                         )
                 candidate_metrics = evaluate_predictions(tuple(candidate_predictions), tuple(bundles), task=config.task.kind)
                 selection_metric = next(
-                    (metric for metric in candidate_metrics if metric.name in {"mse", "log_loss"} and metric.status == "available"),
+                    (
+                        metric
+                        for metric in candidate_metrics
+                        if metric.name in {"mse", "log_loss"} and metric.status == "available"
+                    ),
                     None,
                 )
                 candidate_status.append(
@@ -454,24 +513,33 @@ def run_experiment(
                 candidate_status.append({"model": model_name, "status": "failed", "error": repr(exc)})
         if not candidates:
             raise RuntimeError("No enabled model candidate completed successfully")
+
         def candidate_score(candidate: tuple[str, tuple[PredictionFrame, ...], tuple[MetricResult, ...], list[str]]) -> float:
-            metric = next((item for item in candidate[2] if item.name in {"mse", "log_loss"} and item.status == "available"), None)
+            metric = next(
+                (item for item in candidate[2] if item.name in {"mse", "log_loss"} and item.status == "available"), None
+            )
             return float(metric.value) if metric is not None and metric.value is not None else float("inf")
 
-        selected_name, predictions, metrics, model_dirs = min(candidates, key=lambda candidate: (candidate_score(candidate), candidate[0]))
+        selected_name, predictions, metrics, model_dirs = min(
+            candidates, key=lambda candidate: (candidate_score(candidate), candidate[0])
+        )
         candidate_status.append({"selected_model": selected_name})
         allocations, backtest = _strategy_result(prepared, predictions, config, period_name="development")
         evidence_metrics = ()
         if backtest.net_returns is not None:
             statistical_net = _statistical_backtest_returns(
-                backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar,
-            )
-            evidence_metrics = tuple(sharpe_evidence_metrics(
-                statistical_net.to_numpy(),
+                backtest,
                 frequency=config.statistics.frequency,
-                min_observations=config.statistics.min_observations,
-                trial_sharpes=[],
-            ).values())
+                calendar=prepared.snapshot.calendar,
+            )
+            evidence_metrics = tuple(
+                sharpe_evidence_metrics(
+                    statistical_net.to_numpy(),
+                    frequency=config.statistics.frequency,
+                    min_observations=config.statistics.min_observations,
+                    trial_sharpes=[],
+                ).values()
+            )
             convention = return_convention(config.statistics.frequency)
             for metric in evidence_metrics:
                 metric.inputs.update({"return_convention": convention, "calendar": prepared.snapshot.calendar})
@@ -500,18 +568,28 @@ def run_experiment(
                 "return_convention": return_convention(config.statistics.frequency),
                 "calendar": prepared.snapshot.calendar,
                 "development_net_returns": (
-                    _statistical_backtest_returns(backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar).to_list()
-                    if backtest.net_returns is not None else None
+                    _statistical_backtest_returns(
+                        backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar
+                    ).to_list()
+                    if backtest.net_returns is not None
+                    else None
                 ),
                 "development_gross_returns": (
-                    _statistical_backtest_returns(backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar, gross=True).to_list()
-                    if backtest.gross_returns is not None else None
+                    _statistical_backtest_returns(
+                        backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar, gross=True
+                    ).to_list()
+                    if backtest.gross_returns is not None
+                    else None
                 ),
             },
         )
         return result
     except Exception as exc:
-        store.mark_failed(run_id, repr(exc), {"logical_trial_id": logical_trial, "config_hash": config.resolved_config_hash, "candidates": candidate_status})
+        store.mark_failed(
+            run_id,
+            repr(exc),
+            {"logical_trial_id": logical_trial, "config_hash": config.resolved_config_hash, "candidates": candidate_status},
+        )
         ledger.update_attempt(attempt_id, status="failed", error=repr(exc))
         raise
     finally:
@@ -536,15 +614,16 @@ def load_run(run_id: str, *, artifacts_dir: str | Path | None = None) -> RunResu
         if values.ndim == 2 and values.shape[1] == 1:
             values = values.reshape(-1)
         predictions.append(PredictionFrame(keys=keys, model_ref=model_ref, fold_ref=fold_ref, predictions=values))
-    metrics = tuple(MetricResult.model_validate(item) for item in json.loads((store.run_dir(run_id) / "metrics.json").read_text()))
+    metrics = tuple(
+        MetricResult.model_validate(item) for item in json.loads((store.run_dir(run_id) / "metrics.json").read_text())
+    )
     snapshot_metadata = json.loads((store.run_dir(run_id) / "snapshot/metadata.json").read_text())
     snapshot_metadata["bars"] = pl.read_parquet(store.run_dir(run_id) / "snapshot/bars.parquet")
     snapshot = MarketSnapshot.model_validate(snapshot_metadata)
     if snapshot.snapshot_hash != manifest["snapshot_hash"]:
         raise ValueError("Saved snapshot identity does not match the run manifest")
     allocations = tuple(
-        AllocationFrame.model_validate(item)
-        for item in json.loads((store.run_dir(run_id) / "allocations.json").read_text())
+        AllocationFrame.model_validate(item) for item in json.loads((store.run_dir(run_id) / "allocations.json").read_text())
     )
     backtest = None
     if manifest.get("backtest_paths"):
@@ -565,10 +644,20 @@ def load_run(run_id: str, *, artifacts_dir: str | Path | None = None) -> RunResu
         snapshot_hash=manifest["snapshot_hash"],
         config_hash=manifest["config_hash"],
         split_hash=manifest["split_hash"],
-        model_ref=manifest.get("model_bundles", ["baseline"])[0] if manifest.get("model_bundles") else manifest.get("parent_model_ref") or "baseline",
+        model_ref=manifest.get("model_bundles", ["baseline"])[0]
+        if manifest.get("model_bundles")
+        else manifest.get("parent_model_ref") or "baseline",
         parent_run_id=manifest.get("parent_run_id"),
     )
-    return RunResult(ref=ref, predictions=tuple(predictions), allocations=allocations, metrics=metrics, backtest=backtest, snapshot=snapshot, artifact_manifest=manifest)
+    return RunResult(
+        ref=ref,
+        predictions=tuple(predictions),
+        allocations=allocations,
+        metrics=metrics,
+        backtest=backtest,
+        snapshot=snapshot,
+        artifact_manifest=manifest,
+    )
 
 
 def _load_prediction_frames(store: ArtifactStore, run_id: str, relative_path: str) -> tuple[PredictionFrame, ...]:
@@ -586,9 +675,7 @@ def _load_prediction_frames(store: ArtifactStore, run_id: str, relative_path: st
     return tuple(frames)
 
 
-def load_scoring_targets(
-    run_id: str, *, artifacts_dir: str | Path | None = None
-) -> dict[str, ScoringTargets]:
+def load_scoring_targets(run_id: str, *, artifacts_dir: str | Path | None = None) -> dict[str, ScoringTargets]:
     """Reload checksummed scoring labels by fold, preserving legacy runs without them."""
     store = ArtifactStore(artifacts_dir or get_platform_config().paths.artifacts_dir)
     manifest = store.load_manifest(run_id)
@@ -611,7 +698,9 @@ def load_scoring_targets(
     return targets_by_fold
 
 
-def load_candidate_predictions(run_id: str, model_name: str, *, artifacts_dir: str | Path | None = None) -> tuple[PredictionFrame, ...]:
+def load_candidate_predictions(
+    run_id: str, model_name: str, *, artifacts_dir: str | Path | None = None
+) -> tuple[PredictionFrame, ...]:
     """Load a completed candidate's saved development predictions without retraining."""
     store = ArtifactStore(artifacts_dir or get_platform_config().paths.artifacts_dir)
     manifest = store.load_manifest(run_id)
@@ -619,7 +708,11 @@ def load_candidate_predictions(run_id: str, model_name: str, *, artifacts_dir: s
         store.verify_artifact(run_id, record)
     load_scoring_targets(run_id, artifacts_dir=artifacts_dir)
     candidate = next(
-        (item for item in manifest.get("candidates", []) if item.get("model") == model_name and item.get("status") == "completed"),
+        (
+            item
+            for item in manifest.get("candidates", [])
+            if item.get("model") == model_name and item.get("status") == "completed"
+        ),
         None,
     )
     if candidate is None:
@@ -636,7 +729,9 @@ def campaign_evidence(run_id: str, *, artifacts_dir: str | Path | None = None) -
     ledger = TrialLedger(Path(artifacts_dir or get_platform_config().paths.artifacts_dir) / "trials.sqlite")
     try:
         frequency = result.artifact_manifest["config"]["statistics"]["frequency"]
-        calendar = result.snapshot.calendar if result.snapshot is not None else result.artifact_manifest["config"]["data"]["calendar"]
+        calendar = (
+            result.snapshot.calendar if result.snapshot is not None else result.artifact_manifest["config"]["data"]["calendar"]
+        )
         convention = return_convention(frequency)
         series = ledger.comparable_return_series(
             campaign=result.artifact_manifest["config"]["campaign"]["name"],
@@ -655,7 +750,8 @@ def campaign_evidence(run_id: str, *, artifacts_dir: str | Path | None = None) -
                 continue
         current_returns = (
             _statistical_backtest_returns(result.backtest, frequency=frequency, calendar=calendar).to_numpy()
-            if result.backtest is not None and result.backtest.net_returns is not None else []
+            if result.backtest is not None and result.backtest.net_returns is not None
+            else []
         )
         metrics = sharpe_evidence_metrics(
             current_returns,
@@ -732,26 +828,28 @@ def index_deferred_run(run_id: str, *, artifacts_dir: str | Path | None = None) 
             try:
                 model = create_model(model_name, task=config.task.kind)
                 model = type(model).load(model_dir)
-                references.append(log_local_model(
-                    model,
-                    artifact_path=f"{run_id}-{model_name}-fold-{fold_index}",
-                    model_dir=model_dir,
-                    tracking_uri=platform.paths.mlflow_tracking_uri,
-                    experiment_name=platform.mlflow.experiment_name,
-                    params={
-                        "run_id": run_id,
-                        "config_hash": result.ref.config_hash,
-                        "snapshot_hash": result.ref.snapshot_hash,
-                        "split_hash": result.ref.split_hash,
-                        "task": config.task.kind,
-                        "model": model_name,
-                        "seed": config.models.seed,
-                        "fold": fold_index,
-                        "model_bundle": model_ref,
-                    },
-                    metrics=metrics,
-                    idempotency_key=f"{run_id}:{model_name}:{fold_index}",
-                ))
+                references.append(
+                    log_local_model(
+                        model,
+                        artifact_path=f"{run_id}-{model_name}-fold-{fold_index}",
+                        model_dir=model_dir,
+                        tracking_uri=platform.paths.mlflow_tracking_uri,
+                        experiment_name=platform.mlflow.experiment_name,
+                        params={
+                            "run_id": run_id,
+                            "config_hash": result.ref.config_hash,
+                            "snapshot_hash": result.ref.snapshot_hash,
+                            "split_hash": result.ref.split_hash,
+                            "task": config.task.kind,
+                            "model": model_name,
+                            "seed": config.models.seed,
+                            "fold": fold_index,
+                            "model_bundle": model_ref,
+                        },
+                        metrics=metrics,
+                        idempotency_key=f"{run_id}:{model_name}:{fold_index}",
+                    )
+                )
             except Exception as exc:
                 errors.append(f"{model_name} fold {fold_index}: {exc!r}")
     sidecar = {
@@ -791,12 +889,18 @@ def evaluate_holdout(
         values["backtest"] = {**values["backtest"], **(backtest_overrides or {})}
         config = PipelineConfig(**values)
     legacy_hash_matches = config.source_provenance.get("legacy_artifact_config_hash") == result.ref.config_hash
-    if config.resolved_config_hash != result.ref.config_hash and not legacy_hash_matches and not (allocation_overrides or backtest_overrides):
+    if (
+        config.resolved_config_hash != result.ref.config_hash
+        and not legacy_hash_matches
+        and not (allocation_overrides or backtest_overrides)
+    ):
         raise ValueError("Holdout configuration differs from the selected development run")
     if result.snapshot is None:
         raise ValueError("Selected run has no saved snapshot")
     store = ArtifactStore(get_platform_config().paths.artifacts_dir)
-    selection_suffix = hashlib.sha256(json.dumps([model_name, allocation_overrides, backtest_overrides], sort_keys=True, default=str).encode()).hexdigest()[:12]
+    selection_suffix = hashlib.sha256(
+        json.dumps([model_name, allocation_overrides, backtest_overrides], sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
     child_id = f"{run_id}-holdout-{selection_suffix}"
     if (store.run_dir(child_id) / "manifest.json").exists():
         return load_run(child_id)
@@ -805,18 +909,26 @@ def evaluate_holdout(
     dataset = prepare_dataset(config, snapshot=result.snapshot)
     if dataset.snapshot.snapshot_hash != result.ref.snapshot_hash or _split_hash(dataset) != result.ref.split_hash:
         raise ValueError("Saved snapshot or evaluation schedule changed")
-    selected = model_name or next((item.get("selected_model") for item in result.artifact_manifest.get("candidates", []) if item.get("selected_model")), None)
+    selected = model_name or next(
+        (item.get("selected_model") for item in result.artifact_manifest.get("candidates", []) if item.get("selected_model")),
+        None,
+    )
     if selected is None:
         raise ValueError("Selected development candidate is missing")
     selected_candidate = next(
-        (item for item in result.artifact_manifest.get("candidates", []) if item.get("model") == selected and item.get("status") == "completed"),
+        (
+            item
+            for item in result.artifact_manifest.get("candidates", [])
+            if item.get("model") == selected and item.get("status") == "completed"
+        ),
         None,
     )
     if selected_candidate is None:
         raise ValueError(f"Candidate '{selected}' is not a completed development candidate")
     model_name = selected
     selected_candidate = next(
-        item for item in result.artifact_manifest.get("candidates", [])
+        item
+        for item in result.artifact_manifest.get("candidates", [])
         if item.get("model") == model_name and item.get("status") == "completed"
     )
     durations = [int(value) for value in selected_candidate.get("selected_durations", []) if int(value) > 0]
@@ -827,7 +939,13 @@ def evaluate_holdout(
         config_hash=config.resolved_config_hash,
         snapshot_hash=result.ref.snapshot_hash,
         evaluation_hash=result.ref.split_hash,
-        settings={"evaluation": "holdout", "selected_run": run_id, "model": selected, "allocation": config.allocation.model_dump(mode="json"), "backtest": config.backtest.model_dump(mode="json")},
+        settings={
+            "evaluation": "holdout",
+            "selected_run": run_id,
+            "model": selected,
+            "allocation": config.allocation.model_dump(mode="json"),
+            "backtest": config.backtest.model_dump(mode="json"),
+        },
     )
     store.create_run(child_id)
     holdout_spec = FoldSpec(
@@ -847,17 +965,26 @@ def evaluate_holdout(
         metrics = evaluate_predictions((prediction,), (bundle,), task=config.task.kind)
         allocations, backtest = _strategy_result(dataset, (prediction,), config, period_name="holdout")
         holdout_result = persist_run(
-            store=store, run_id=child_id, config=config, dataset=dataset,
-            predictions=(prediction,), metrics=metrics, model_dirs=[model_ref],
-            allocations=allocations, backtest=backtest, bundles=(bundle,),
-            candidate_status=[{
-                "selected_model": selected,
-                "evaluation": "holdout",
-                "selection_source": "explicit" if model_name else "development_default",
-                "exploratory_holdout_reuse": exploratory_reuse,
-                "allocation": config.allocation.model_dump(mode="json"),
-                "backtest": config.backtest.model_dump(mode="json"),
-            }],
+            store=store,
+            run_id=child_id,
+            config=config,
+            dataset=dataset,
+            predictions=(prediction,),
+            metrics=metrics,
+            model_dirs=[model_ref],
+            allocations=allocations,
+            backtest=backtest,
+            bundles=(bundle,),
+            candidate_status=[
+                {
+                    "selected_model": selected,
+                    "evaluation": "holdout",
+                    "selection_source": "explicit" if model_name else "development_default",
+                    "exploratory_holdout_reuse": exploratory_reuse,
+                    "allocation": config.allocation.model_dump(mode="json"),
+                    "backtest": config.backtest.model_dump(mode="json"),
+                }
+            ],
             parent_run_id=run_id,
         )
         ledger.update_attempt(attempt, status="completed", result={"run_id": child_id, "logical_trial_id": logical})
@@ -898,24 +1025,35 @@ def evaluate_saved_predictions(
     selected_predictions = parent.predictions if model_name is None else load_candidate_predictions(run_id, model_name)
     candidate_record = next(
         (
-            item for item in parent.artifact_manifest.get("candidates", [])
+            item
+            for item in parent.artifact_manifest.get("candidates", [])
             if item.get("model") == selected_name and item.get("status") == "completed"
         ),
         None,
     )
     selected_metrics = (
         tuple(MetricResult.model_validate(item) for item in candidate_record.get("metrics", []))
-        if candidate_record and candidate_record.get("metrics") else parent.metrics
+        if candidate_record and candidate_record.get("metrics")
+        else parent.metrics
     )
-    suffix = hashlib.sha256(json.dumps([model_name, allocation_overrides, backtest_overrides], sort_keys=True, default=str).encode()).hexdigest()[:12]
+    suffix = hashlib.sha256(
+        json.dumps([model_name, allocation_overrides, backtest_overrides], sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
     child_id = f"{run_id}-child-{suffix}"
     if (store.run_dir(child_id) / "manifest.json").exists():
         return load_run(child_id)
     ledger = TrialLedger(get_platform_config().paths.artifacts_dir / "trials.sqlite")
     logical, attempt, _ = ledger.register_attempt(
-        campaign=config.campaign.name, config_hash=config.resolved_config_hash,
-        snapshot_hash=parent.ref.snapshot_hash, evaluation_hash=parent.ref.split_hash,
-        settings={"evaluation": "development", "parent_prediction_run": run_id, "allocation": config.allocation.model_dump(mode="json"), "backtest": config.backtest.model_dump(mode="json")},
+        campaign=config.campaign.name,
+        config_hash=config.resolved_config_hash,
+        snapshot_hash=parent.ref.snapshot_hash,
+        evaluation_hash=parent.ref.split_hash,
+        settings={
+            "evaluation": "development",
+            "parent_prediction_run": run_id,
+            "allocation": config.allocation.model_dump(mode="json"),
+            "backtest": config.backtest.model_dump(mode="json"),
+        },
     )
     store.create_run(child_id)
     try:
@@ -924,10 +1062,17 @@ def evaluate_saved_predictions(
             raise ValueError("Saved evaluation schedule changed")
         allocations, backtest = _strategy_result(dataset, selected_predictions, config, period_name="development")
         result = persist_run(
-            store=store, run_id=child_id, config=config, dataset=dataset,
-            predictions=selected_predictions, metrics=selected_metrics, model_dirs=[],
-            allocations=allocations, backtest=backtest,
-            parent_run_id=run_id, parent_model_ref=selected_name or parent.ref.model_ref,
+            store=store,
+            run_id=child_id,
+            config=config,
+            dataset=dataset,
+            predictions=selected_predictions,
+            metrics=selected_metrics,
+            model_dirs=[],
+            allocations=allocations,
+            backtest=backtest,
+            parent_run_id=run_id,
+            parent_model_ref=selected_name or parent.ref.model_ref,
             inherited_scoring_coverage=parent.artifact_manifest.get("scored_coverage"),
             candidate_status=[{"model": model_name or parent.ref.model_ref, "selection_source": "saved_development_predictions"}],
         )

@@ -1,5 +1,5 @@
-from lab.research.plots import plot_learning_curves, plot_trial_evidence
 from lab.quant.metrics import unavailable_metric
+from lab.research.plots import plot_learning_curves, plot_trial_evidence
 
 
 def test_plot_helpers_preserve_available_and_unavailable_evidence():

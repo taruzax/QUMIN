@@ -59,7 +59,15 @@ class TrialLedger:
         with self.connection:
             self.connection.execute(
                 "INSERT OR IGNORE INTO trials VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (logical, campaign, config_hash, snapshot_hash, evaluation_hash, json.dumps(settings, default=str, sort_keys=True), _now()),
+                (
+                    logical,
+                    campaign,
+                    config_hash,
+                    snapshot_hash,
+                    evaluation_hash,
+                    json.dumps(settings, default=str, sort_keys=True),
+                    _now(),
+                ),
             )
             self.connection.execute(
                 "INSERT INTO attempts VALUES (?, ?, 'running', ?, NULL, NULL, NULL)",
@@ -67,17 +75,28 @@ class TrialLedger:
             )
         return logical, attempt, self._attempt_count(logical) > 1
 
-    def update_attempt(self, attempt_id: str, *, status: str, result: dict[str, Any] | None = None, error: str | None = None) -> None:
+    def update_attempt(
+        self, attempt_id: str, *, status: str, result: dict[str, Any] | None = None, error: str | None = None
+    ) -> None:
         if status not in {"running", "completed", "failed", "cancelled"}:
             raise ValueError(f"Invalid attempt status: {status}")
         with self.connection:
             self.connection.execute(
                 "UPDATE attempts SET status=?, finished_at=?, error=?, result_json=? WHERE attempt_id=?",
-                (status, None if status == "running" else _now(), error, json.dumps(result, default=str, sort_keys=True) if result else None, attempt_id),
+                (
+                    status,
+                    None if status == "running" else _now(),
+                    error,
+                    json.dumps(result, default=str, sort_keys=True) if result else None,
+                    attempt_id,
+                ),
             )
 
     def trials(self, campaign: str | None = None) -> list[dict[str, Any]]:
-        query = "SELECT logical_trial_id, campaign, config_hash, snapshot_hash, evaluation_hash, settings_json, created_at FROM trials"
+        query = (
+            "SELECT logical_trial_id, campaign, config_hash, snapshot_hash, evaluation_hash, settings_json, created_at "
+            "FROM trials"
+        )
         params: tuple[Any, ...] = ()
         if campaign is not None:
             query += " WHERE campaign=?"
@@ -127,7 +146,10 @@ class TrialLedger:
         task: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return comparable logical trials and retain attempts for exclusion reporting."""
-        query = "SELECT logical_trial_id, campaign, config_hash, snapshot_hash, evaluation_hash, settings_json, created_at FROM trials WHERE snapshot_hash=? AND evaluation_hash=?"
+        query = (
+            "SELECT logical_trial_id, campaign, config_hash, snapshot_hash, evaluation_hash, settings_json, created_at "
+            "FROM trials WHERE snapshot_hash=? AND evaluation_hash=?"
+        )
         params: list[Any] = [snapshot_hash, evaluation_hash]
         if campaign is not None:
             query += " AND campaign=?"
@@ -143,16 +165,18 @@ class TrialLedger:
             if task is not None and settings.get("task") != task:
                 continue
             attempts = self.attempts(row[0])
-            evidence.append({
-                "logical_trial_id": row[0],
-                "campaign": row[1],
-                "config_hash": row[2],
-                "snapshot_hash": row[3],
-                "evaluation_hash": row[4],
-                "settings": settings,
-                "created_at": row[6],
-                "attempts": attempts,
-            })
+            evidence.append(
+                {
+                    "logical_trial_id": row[0],
+                    "campaign": row[1],
+                    "config_hash": row[2],
+                    "snapshot_hash": row[3],
+                    "evaluation_hash": row[4],
+                    "settings": settings,
+                    "created_at": row[6],
+                    "attempts": attempts,
+                }
+            )
         return evidence
 
     def comparable_return_series(
@@ -180,28 +204,34 @@ class TrialLedger:
         for trial in evidence:
             if return_convention is not None and trial["settings"].get("return_convention") != return_convention:
                 for attempt in trial["attempts"] or [None]:
-                    exclusions.append({
-                        "logical_trial_id": trial["logical_trial_id"],
-                        "attempt_id": attempt["attempt_id"] if attempt else None,
-                        "status": attempt["status"] if attempt else "missing",
-                        "reason": (
-                            f"trial settings return_convention {trial['settings'].get('return_convention')!r} "
-                            f"does not match requested {return_convention!r}"
-                        ),
-                    })
+                    exclusions.append(
+                        {
+                            "logical_trial_id": trial["logical_trial_id"],
+                            "attempt_id": attempt["attempt_id"] if attempt else None,
+                            "status": attempt["status"] if attempt else "missing",
+                            "reason": (
+                                f"trial settings return_convention {trial['settings'].get('return_convention')!r} "
+                                f"does not match requested {return_convention!r}"
+                            ),
+                        }
+                    )
                 continue
             successful = [
-                attempt for attempt in trial["attempts"]
+                attempt
+                for attempt in trial["attempts"]
                 if attempt["status"] == "completed"
                 and (attempt.get("result") or {}).get("development_net_returns")
-                and (
-                    return_convention is None
-                    or (attempt.get("result") or {}).get("return_convention") == return_convention
-                )
+                and (return_convention is None or (attempt.get("result") or {}).get("return_convention") == return_convention)
             ]
             selected = successful[-1] if successful else None
             if selected is not None:
-                complete.append({"logical_trial_id": trial["logical_trial_id"], "attempt_id": selected["attempt_id"], "returns": selected["result"]["development_net_returns"]})
+                complete.append(
+                    {
+                        "logical_trial_id": trial["logical_trial_id"],
+                        "attempt_id": selected["attempt_id"],
+                        "returns": selected["result"]["development_net_returns"],
+                    }
+                )
             for attempt in trial["attempts"]:
                 if selected is not None and attempt["attempt_id"] == selected["attempt_id"]:
                     continue
@@ -211,17 +241,21 @@ class TrialLedger:
                     reason = attempt.get("error") or "missing returns"
                 elif return_convention is not None and result.get("return_convention") != return_convention:
                     actual_convention = result.get("return_convention")
-                    reason = f"attempt result return_convention {actual_convention!r} does not match requested {return_convention!r}"
+                    reason = (
+                        f"attempt result return_convention {actual_convention!r} does not match requested {return_convention!r}"
+                    )
                 elif not has_returns:
                     reason = "missing returns"
                 else:
                     reason = "duplicate successful attempt"
-                exclusions.append({
-                    "logical_trial_id": trial["logical_trial_id"],
-                    "attempt_id": attempt["attempt_id"],
-                    "status": attempt["status"],
-                    "reason": reason,
-                })
+                exclusions.append(
+                    {
+                        "logical_trial_id": trial["logical_trial_id"],
+                        "attempt_id": attempt["attempt_id"],
+                        "status": attempt["status"],
+                        "reason": reason,
+                    }
+                )
         return {"complete": complete, "exclusions": exclusions, "population": len(evidence)}
 
     def close(self) -> None:
@@ -233,4 +267,6 @@ class TrialLedger:
         return f"trial-{uuid.uuid5(uuid.NAMESPACE_URL, payload).hex}"
 
     def _attempt_count(self, logical_trial_id: str) -> int:
-        return int(self.connection.execute("SELECT COUNT(*) FROM attempts WHERE logical_trial_id=?", (logical_trial_id,)).fetchone()[0])
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM attempts WHERE logical_trial_id=?", (logical_trial_id,)).fetchone()[0]
+        )

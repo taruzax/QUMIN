@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import polars as pl
@@ -56,10 +56,7 @@ def estimate_ledoit_wolf(
     """Estimate validated Ledoit-Wolf covariance from synchronized returns."""
     matrix, names = _as_return_matrix(returns, tickers)
     if matrix.shape[0] < min_observations:
-        raise ValueError(
-            f"At least {min_observations} synchronized return observations are required; "
-            f"received {matrix.shape[0]}"
-        )
+        raise ValueError(f"At least {min_observations} synchronized return observations are required; received {matrix.shape[0]}")
     estimator = LedoitWolf().fit(matrix)
     covariance_array_value = np.asarray(estimator.covariance_, dtype=float)
     covariance_array_value = (covariance_array_value + covariance_array_value.T) / 2.0
@@ -115,7 +112,7 @@ def denoise_cov(cov: np.ndarray, n_observarions: int, method: str | None = None)
     noise_mask = eigvals < lambda_plus
     if noise_mask.any():
         eigvals[noise_mask] = eigvals[noise_mask].mean()
-    return (eigvecs @ np.diag(np.maximum(eigvals, 0.0)) @ eigvecs.T).real
+    return cast(np.ndarray, (eigvecs @ np.diag(np.maximum(eigvals, 0.0)) @ eigvecs.T).real)
 
 
 def cov_to_corr(cov: np.ndarray) -> np.ndarray:
@@ -124,4 +121,4 @@ def cov_to_corr(cov: np.ndarray) -> np.ndarray:
     std = np.where(std == 0, 1e-10, std)
     corr = np.clip(matrix / np.outer(std, std), -1.0, 1.0)
     np.fill_diagonal(corr, 1.0)
-    return corr
+    return cast(np.ndarray, corr)

@@ -277,8 +277,7 @@ class CampaignMatrixConfig(StrictModel):
             planned *= size
         if planned > self.max_planned_experiments:
             raise ValueError(
-                f"Campaign Cartesian product has {planned} experiments; "
-                f"max_planned_experiments is {self.max_planned_experiments}"
+                f"Campaign Cartesian product has {planned} experiments; max_planned_experiments is {self.max_planned_experiments}"
             )
         return self
 
@@ -350,7 +349,7 @@ def _set_nested(mapping: dict[str, Any], path: tuple[str, ...], value: Any, sour
 
 def _translate_yaml(raw: dict[str, Any]) -> dict[str, Any]:
     translated: dict[str, Any] = {key: deepcopy(value) for key, value in raw.items() if key in CANONICAL_SECTIONS}
-    legacy_sections = {
+    legacy_sections: dict[str, dict[str, tuple[str, ...]]] = {
         "labeling": {
             "profit_taking": ("task", "triple_barrier", "profit_taking"),
             "stop_loss": ("task", "triple_barrier", "stop_loss"),
@@ -438,7 +437,9 @@ def _yaml_settings_source() -> dict[str, Any]:
     return _load_yaml_defaults()
 
 
-def _validate_resolved_config(cls: type["PipelineConfig"], values: dict[str, Any], provenance: dict[str, Any]) -> "PipelineConfig":
+def _validate_resolved_config(
+    cls: type["PipelineConfig"], values: dict[str, Any], provenance: dict[str, Any]
+) -> "PipelineConfig":
     """Run full Pydantic validation without reloading BaseSettings sources."""
     instance = cls.__new__(cls)
     cls.__pydantic_validator__.validate_python(
@@ -517,7 +518,9 @@ class PipelineConfig(BaseSettings):
             "dotenv_fields": sorted(dotenv_values),
             "environment_fields": sorted(environment_values),
             "runtime_override_fields": sorted(runtime_values),
-            "code_default_fields": sorted(CANONICAL_SECTIONS - set(yaml_values) - set(dotenv_values) - set(environment_values) - set(runtime_values)),
+            "code_default_fields": sorted(
+                CANONICAL_SECTIONS - set(yaml_values) - set(dotenv_values) - set(environment_values) - set(runtime_values)
+            ),
         }
         return _validate_resolved_config(cls, values, provenance)
 

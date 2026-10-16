@@ -1,13 +1,13 @@
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from threadpoolctl import threadpool_limits
 from xgboost import XGBClassifier, XGBRegressor
 
-from lab.models.base import BaseModel
 from lab.core.contracts import WindowSet
+from lab.models.base import BaseModel
 from lab.models.devices import resolve_device
 
 
@@ -124,8 +124,18 @@ class XGBoostModel(BaseModel):
                 objective="reg:squarederror",
                 **estimator_params,
             )
-            train_targets = targets.reshape(-1).astype(np.float32)
-            fit_kwargs = {"eval_set": [(flattened, train_targets), (stopping_flattened, stopping_targets.reshape(-1).astype(np.float32))], "verbose": False} if stopping_data is not None else {}
+            train_targets = np.asarray(targets).reshape(-1).astype(np.float32)
+            fit_kwargs = (
+                {
+                    "eval_set": [
+                        (flattened, train_targets),
+                        (stopping_flattened, np.asarray(stopping_targets).reshape(-1).astype(np.float32)),
+                    ],
+                    "verbose": False,
+                }
+                if stopping_data is not None
+                else {}
+            )
             with threadpool_limits(limits=1, user_api="openmp"):
                 self._estimator.fit(flattened, train_targets, **fit_kwargs)
             self.classes_seen = np.asarray([], dtype=np.int8)
@@ -146,7 +156,7 @@ class XGBoostModel(BaseModel):
                 encoded = np.asarray([class_to_encoded[int(label)] for label in labels], dtype=np.int8)
                 stopping_encoded = None
                 if stopping_data is not None:
-                    raw_stopping = stopping_targets.reshape(-1)
+                    raw_stopping = np.asarray(stopping_targets).reshape(-1)
                     if not np.isfinite(raw_stopping).all() or not np.equal(raw_stopping, raw_stopping.astype(int)).all():
                         raise ValueError("Classification stopping labels must be finite integers in {-1, 0, +1}")
                     stopping_labels = raw_stopping.astype(np.int8)
@@ -162,7 +172,11 @@ class XGBoostModel(BaseModel):
                     num_class=int(self.classes_seen.size),
                     **estimator_params,
                 )
-                fit_kwargs = {"eval_set": [(flattened, encoded), (stopping_flattened, stopping_encoded)], "verbose": False} if stopping_data is not None else {}
+                fit_kwargs = (
+                    {"eval_set": [(flattened, encoded), (stopping_flattened, stopping_encoded)], "verbose": False}
+                    if stopping_data is not None
+                    else {}
+                )
                 with threadpool_limits(limits=1, user_api="openmp"):
                     self._estimator.fit(flattened, encoded, **fit_kwargs)
                 self.adapter_mode = "classification"
@@ -174,17 +188,21 @@ class XGBoostModel(BaseModel):
             series = [next(iter(metrics.values()), []) for metrics in evaluation_result.values()]
             train_values = series[0] if series else []
             stop_values = series[-1] if series else []
-            self.training_history = [{"round": float(index + 1), "loss": float(value)} for index, value in enumerate(train_values)]
+            self.training_history = [
+                {"round": float(index + 1), "loss": float(value)} for index, value in enumerate(train_values)
+            ]
             self.stopping_history = [{"round": float(index + 1), "loss": float(value)} for index, value in enumerate(stop_values)]
             self.selected_duration = int(best_iteration + 1) if best_iteration is not None else effective_estimators
             self.stopping_config = {"patience": int(stopping_patience), "metric": "validation_loss"}
         else:
             self.selected_duration = effective_estimators
-            self.training_history = [{
-                "rows": float(features.shape[0]),
-                "flattened_features": float(flattened.shape[1]),
-                "estimators": float(self.selected_duration),
-            }]
+            self.training_history = [
+                {
+                    "rows": float(features.shape[0]),
+                    "flattened_features": float(flattened.shape[1]),
+                    "estimators": float(self.selected_duration),
+                }
+            ]
         if stopping_data is not None and self._estimator is None:
             self.stopping_history = []
             self.stopping_config = {"patience": int(stopping_patience), "metric": "validation_loss"}
@@ -198,12 +216,12 @@ class XGBoostModel(BaseModel):
         self._require_fitted()
         if self.task == "classification":
             probabilities = self.predict_proba(X)
-            return self.classes[np.argmax(probabilities, axis=1)]
+            return cast(np.ndarray, self.classes[np.argmax(probabilities, axis=1)])
         if self._estimator is None:
             raise RuntimeError("Regression estimator is unavailable")
         with threadpool_limits(limits=1, user_api="openmp"):
             predictions = self._estimator.predict(self._prepare_features(X))
-        return np.asarray(predictions, dtype=np.float64)
+        return cast(np.ndarray, np.asarray(predictions, dtype=np.float64))
 
     def predict_proba(self, X: Any) -> np.ndarray:
         self._require_fitted()

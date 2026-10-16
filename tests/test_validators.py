@@ -128,11 +128,13 @@ def test_canonical_bars_reject_bad_ohlc():
 
 
 def test_calendar_coverage_reports_a_missing_expected_ticker_bar():
-    expected = pl.DataFrame({
-        "session_id": ["2024-01-02"],
-        "bar_open_time": [datetime(2024, 1, 2, 14, 30, tzinfo=timezone.utc)],
-        "bar_close_time": [datetime(2024, 1, 2, 15, 30, tzinfo=timezone.utc)],
-    })
+    expected = pl.DataFrame(
+        {
+            "session_id": ["2024-01-02"],
+            "bar_open_time": [datetime(2024, 1, 2, 14, 30, tzinfo=timezone.utc)],
+            "bar_close_time": [datetime(2024, 1, 2, 15, 30, tzinfo=timezone.utc)],
+        }
+    )
     observed = expected.head(0).with_columns(pl.lit(None, dtype=pl.Utf8).alias("ticker"))
 
     result = compare_bar_coverage(expected, observed, tickers=("AAA",))

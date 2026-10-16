@@ -6,7 +6,6 @@ import polars as pl
 from lab.core.contracts import SampleKey, SampleSet, WindowSet
 from lab.core.schemas import validate_feature_names
 
-
 _UTC_DATETIME = pl.Datetime(time_unit="us", time_zone="UTC")
 
 
@@ -61,9 +60,7 @@ def build_sample_set(
         if labels["t1"].null_count():
             raise ValueError("Labels with null t1 cannot become supervised samples")
 
-    allowed = None if allowed_decisions is None else {
-        (str(ticker), _utc(timestamp)) for ticker, timestamp in allowed_decisions
-    }
+    allowed = None if allowed_decisions is None else {(str(ticker), _utc(timestamp)) for ticker, timestamp in allowed_decisions}
     ordered = frame.sort(["ticker", "timestamp"])
     feature_blocks: list[np.ndarray] = []
     candidate_frames: list[pl.DataFrame] = []
@@ -124,18 +121,22 @@ def build_sample_set(
 
     if labels is not None:
         label_order = np.arange(labels.height, dtype=np.int64)
-        label_frame = pl.DataFrame(
-            {
-                "ticker": labels["ticker"].cast(pl.String),
-                "decision_time": _datetime_series(
-                    "decision_time", [_utc(value) for value in labels["decision_time"].to_list()]
-                ),
-                target_name: labels[target_name],
-                "event_end": labels["event_end"] if "event_end" in labels.columns else [None] * labels.height,
-                "t1": labels["t1"],
-                "_label_order": label_order,
-            }
-        ).sort("_label_order").unique(subset=["ticker", "decision_time"], keep="last", maintain_order=True)
+        label_frame = (
+            pl.DataFrame(
+                {
+                    "ticker": labels["ticker"].cast(pl.String),
+                    "decision_time": _datetime_series(
+                        "decision_time", [_utc(value) for value in labels["decision_time"].to_list()]
+                    ),
+                    target_name: labels[target_name],
+                    "event_end": labels["event_end"] if "event_end" in labels.columns else [None] * labels.height,
+                    "t1": labels["t1"],
+                    "_label_order": label_order,
+                }
+            )
+            .sort("_label_order")
+            .unique(subset=["ticker", "decision_time"], keep="last", maintain_order=True)
+        )
         candidates = candidates.join(label_frame, on=["ticker", "decision_time"], how="inner")
 
     candidates = candidates.sort("_candidate_order")
@@ -157,8 +158,12 @@ def build_sample_set(
         )
 
     windows = WindowSet(
-        feature_blocks, block_ids, starts, sequence_len,
-        feature_count=len(feature_columns), y=targets,
+        feature_blocks,
+        block_ids,
+        starts,
+        sequence_len,
+        feature_count=len(feature_columns),
+        y=targets,
     )
     return SampleSet(
         X=windows,

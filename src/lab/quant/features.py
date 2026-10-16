@@ -187,11 +187,7 @@ def apply_all_features(df: pl.DataFrame, config: PipelineConfig) -> pl.DataFrame
     """
     if "ticker" not in df.columns or "timestamp" not in df.columns:
         raise ValueError("Feature construction requires ticker and timestamp columns")
-    future_columns = [
-        column
-        for column in df.columns
-        if column in FUTURE_DERIVED_COLUMNS or column.startswith("target_")
-    ]
+    future_columns = [column for column in df.columns if column in FUTURE_DERIVED_COLUMNS or column.startswith("target_")]
     if future_columns:
         df = df.drop(future_columns)
     df = df.sort(["ticker", "timestamp"])
@@ -215,11 +211,7 @@ def feature_specification(df: pl.DataFrame, config: PipelineConfig) -> tuple[str
     else:
         candidates = list(CAUSAL_BASE_FEATURES)
         candidates.extend(return_col(lag) for lag in config.return_lags)
-        candidates.extend(
-            lagged_col(lag, lookback)
-            for lookback in config.lookback_periods
-            for lag in config.return_lags
-        )
+        candidates.extend(lagged_col(lag, lookback) for lookback in config.lookback_periods for lag in config.return_lags)
         names = tuple(name for name in candidates if name in df.columns)
         names = validate_feature_names(names, set(df.columns))
     forbidden = [name for name in names if name in {"timestamp", "ticker", "sector", "industry"}]

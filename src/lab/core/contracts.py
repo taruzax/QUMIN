@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from math import isfinite
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import polars as pl
@@ -280,7 +280,7 @@ class ScoringTargets(ContractModel):
     @field_validator("values")
     @classmethod
     def validate_values(cls, value: np.ndarray) -> np.ndarray:
-        values = np.asarray(value, dtype=np.float32).copy()
+        values = cast(np.ndarray, np.asarray(value, dtype=np.float32).copy())
         if values.ndim != 1 or not np.isfinite(values).all():
             raise ValueError("Scoring targets must be a finite one-dimensional array")
         values.setflags(write=False)
@@ -659,9 +659,7 @@ class CampaignRunEntry(ContractModel):
                 "cancelled": {"running", "cancelled"},
             }
             if self.status not in allowed[self.previous_status]:
-                raise ValueError(
-                    f"Illegal campaign status transition: {self.previous_status} -> {self.status}"
-                )
+                raise ValueError(f"Illegal campaign status transition: {self.previous_status} -> {self.status}")
         return self
 
 

@@ -67,7 +67,9 @@ def _next_open(bars: pl.DataFrame, decision_time: datetime) -> datetime:
     return future["bar_open_time"][0] if "bar_open_time" in future.columns else future["timestamp"][0]
 
 
-def _eligible_tickers(bars: pl.DataFrame, tickers: tuple[str, ...], decision_time: datetime, lookback: int) -> tuple[set[str], dict[str, str]]:
+def _eligible_tickers(
+    bars: pl.DataFrame, tickers: tuple[str, ...], decision_time: datetime, lookback: int
+) -> tuple[set[str], dict[str, str]]:
     history = bars.filter(pl.col("timestamp") <= decision_time).sort(["timestamp", "ticker"])
     pivot = history.pivot(index="timestamp", on="ticker", values="close", aggregate_function="first").sort("timestamp")
     eligibility: dict[str, str] = {}
@@ -106,9 +108,13 @@ def build_allocations(
     if not grouped:
         return ()
     first_decision, last_decision = min(grouped), max(grouped)
-    decision_times = snapshot.bars.filter(
-        (pl.col("timestamp") >= first_decision) & (pl.col("timestamp") <= last_decision)
-    ).get_column("timestamp").unique().sort().to_list()
+    decision_times = (
+        snapshot.bars.filter((pl.col("timestamp") >= first_decision) & (pl.col("timestamp") <= last_decision))
+        .get_column("timestamp")
+        .unique()
+        .sort()
+        .to_list()
+    )
     frames: list[AllocationFrame] = []
     ordered_tickers = tuple(sorted(snapshot.ticker_order))
     budgets: dict[str, float] = {}
@@ -135,15 +141,20 @@ def build_allocations(
             selected = tuple(sorted(eligible))
             covariance_snapshot = None
             if allocation_config.method == "hrp" and len(selected) > 1:
-                history = snapshot.bars.filter(
-                    (pl.col("timestamp") <= decision_time) & pl.col("ticker").is_in(selected)
-                ).sort("timestamp")
-                prices = history.pivot(index="timestamp", on="ticker", values="close", aggregate_function="first").sort("timestamp")
-                returns = prices.select(
-                    [pl.col("timestamp"), *[pl.col(ticker).pct_change().alias(ticker) for ticker in selected]]
-                ).tail(history_bars).drop_nulls()
+                history = snapshot.bars.filter((pl.col("timestamp") <= decision_time) & pl.col("ticker").is_in(selected)).sort(
+                    "timestamp"
+                )
+                prices = history.pivot(index="timestamp", on="ticker", values="close", aggregate_function="first").sort(
+                    "timestamp"
+                )
+                returns = (
+                    prices.select([pl.col("timestamp"), *[pl.col(ticker).pct_change().alias(ticker) for ticker in selected]])
+                    .tail(history_bars)
+                    .drop_nulls()
+                )
                 covariance, diagnostics = estimate_ledoit_wolf(
-                    returns, min_observations=history_bars,
+                    returns,
+                    min_observations=history_bars,
                 )
                 requested = hrp_pypfort(covariance, selected)
                 covariance_snapshot = {"matrix": covariance.to_dict(as_series=False), "diagnostics": diagnostics.__dict__}

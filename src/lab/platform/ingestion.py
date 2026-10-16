@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import polars as pl
 
@@ -51,7 +52,7 @@ class IngestionPlanner:
             return IngestionPlan(
                 stream, start_boundary, max(current, start_boundary + timedelta(microseconds=1)), None, tickers, no_op=True
             )
-        completed_boundary = expected["bar_close_time"].max()
+        completed_boundary = cast(datetime, expected["bar_close_time"].max())
         stream_entries = [entry for entry in self.catalog.list() if entry.stream_id == stream.name]
         if not stream_entries:
             fetch_start = start_boundary
@@ -71,18 +72,18 @@ class IngestionPlanner:
                     else row["bar_open_time"]
                     for row in missing
                 )
-                repair_bar = missing_opens[0] if missing_opens else latest.last_completed_bar
+                repair_bar = cast(datetime, missing_opens[0]) if missing_opens else latest.last_completed_bar
                 repair_keys = expected.filter(pl.col("bar_open_time") <= repair_bar).sort("bar_open_time")
                 if repair_keys.is_empty():
                     return IngestionPlan(
                         stream, latest.last_completed_bar, current, latest.last_completed_bar, tickers, no_op=True
                     )
                 overlap_index = max(0, repair_keys.height - stream.refresh_overlap_bars - 1)
-                fetch_start = repair_keys["bar_open_time"][overlap_index]
+                fetch_start = cast(datetime, repair_keys["bar_open_time"][overlap_index])
                 return IngestionPlan(stream, fetch_start, completed_boundary, completed_boundary, tickers)
-            prior = expected.filter(pl.col("bar_close_time") <= new_keys["bar_close_time"].min())
+            prior = expected.filter(pl.col("bar_close_time") <= cast(datetime, new_keys["bar_close_time"].min()))
             overlap_index = max(0, prior.height - stream.refresh_overlap_bars - 1)
-            fetch_start = prior["bar_open_time"][overlap_index] if prior.height else start_boundary
+            fetch_start = cast(datetime, prior["bar_open_time"][overlap_index]) if prior.height else start_boundary
         return IngestionPlan(stream, fetch_start, completed_boundary, completed_boundary, tickers)
 
 
@@ -165,11 +166,6 @@ class IngestionService:
             prior_entries.sort(key=lambda entry: (entry.last_completed_bar, entry.published_at))
             partitions = [self.catalog.load(prior_entries[-1].snapshot_id).bars] if prior_entries else []
             prior_bars = partitions[-1] if partitions else pl.DataFrame()
-            previous_keys = (
-                set(zip(prior_bars.get_column("ticker").to_list(), prior_bars.get_column("bar_open_time").to_list()))
-                if partitions
-                else set()
-            )
             revisions = 0
             if partitions:
                 prior_by_key = {(row["ticker"], row["bar_open_time"]): row for row in prior_bars.to_dicts()}

@@ -74,8 +74,10 @@ def test_repeated_fit_continues_the_existing_network():
 @pytest.mark.parametrize(
     "model_type,task",
     [
-        (GRUModel, "regression"), (LSTMModel, "regression"),
-        (GRUModel, "classification"), (LSTMModel, "classification"),
+        (GRUModel, "regression"),
+        (LSTMModel, "regression"),
+        (GRUModel, "classification"),
+        (LSTMModel, "classification"),
     ],
 )
 def test_recurrent_models_fit_and_predict_lazy_windows_in_order(model_type, task, tmp_path):
@@ -84,17 +86,25 @@ def test_recurrent_models_fit_and_predict_lazy_windows_in_order(model_type, task
     if task == "classification":
         targets = np.asarray([-1, 0, 1, 0, -1, 1, 0], dtype=np.int8)
     windows = WindowSet(
-        [feature_rows], np.zeros(7, dtype=np.int64), np.arange(7), 4, y=targets,
+        [feature_rows],
+        np.zeros(7, dtype=np.int64),
+        np.arange(7),
+        4,
+        y=targets,
     )
     model = model_type(task=task, epochs=2, batch_size=3, hidden_size=4, seed=17)
 
     model.fit(windows, targets)
     predictions = model.predict(windows)
     with torch.no_grad():
-        ordered_outputs = np.concatenate([
-            model.network(torch.from_numpy((windows[index][0] if isinstance(windows[index], tuple) else windows[index])[None])).numpy()
-            for index in range(len(windows))
-        ])
+        ordered_outputs = np.concatenate(
+            [
+                model.network(
+                    torch.from_numpy((windows[index][0] if isinstance(windows[index], tuple) else windows[index])[None])
+                ).numpy()
+                for index in range(len(windows))
+            ]
+        )
     expected = model.classes[np.argmax(ordered_outputs, axis=1)] if task == "classification" else ordered_outputs.reshape(-1)
     restored = model_type.load(model.save(tmp_path / f"{model_type.__name__}-{task}"))
 
@@ -121,7 +131,8 @@ def test_recurrent_fit_with_stopping_and_prediction_never_materializes_window_se
     model = GRUModel(epochs=2, batch_size=4, hidden_size=4, seed=23)
 
     model.fit(
-        training_samples.X, np.linspace(0.0, 1.0, len(training_samples.X), dtype=np.float32),
+        training_samples.X,
+        np.linspace(0.0, 1.0, len(training_samples.X), dtype=np.float32),
         stopping_data=(stopping_samples.X, np.linspace(0.0, 1.0, len(stopping_samples.X), dtype=np.float32)),
     )
     predictions = model.predict(stopping_samples.X)

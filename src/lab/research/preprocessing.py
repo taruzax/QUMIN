@@ -1,6 +1,6 @@
+import hashlib
 from dataclasses import dataclass
 from datetime import timezone
-import hashlib
 from typing import Any
 
 import numpy as np
@@ -231,9 +231,10 @@ def prepare_fold(dataset: PreparedDataset, fold_spec) -> FoldBundle:
     evaluation_allowed = {
         (str(row["ticker"]), row["timestamp"])
         for row in dataset.features.filter(
-            (pl.col("timestamp") >= fold_spec.validation_start)
-            & (pl.col("timestamp") < fold_spec.validation_end)
-        ).select("ticker", "timestamp").to_dicts()
+            (pl.col("timestamp") >= fold_spec.validation_start) & (pl.col("timestamp") < fold_spec.validation_end)
+        )
+        .select("ticker", "timestamp")
+        .to_dicts()
     }
     target_name = "target_1b_v2" if "target_1b_v2" in dataset.labels.columns else "label"
     train_samples = build_sample_set(
@@ -252,8 +253,7 @@ def prepare_fold(dataset: PreparedDataset, fold_spec) -> FoldBundle:
     )
     scoreable_rows = scoreable.select("ticker", "decision_time", target_name).to_dicts()
     scoreable_by_key = {
-        (str(row["ticker"]), row["decision_time"].astimezone(timezone.utc)): float(row[target_name])
-        for row in scoreable_rows
+        (str(row["ticker"]), row["decision_time"].astimezone(timezone.utc)): float(row[target_name]) for row in scoreable_rows
     }
     if len(scoreable_by_key) != len(scoreable_rows):
         raise ValueError("Scoreable label keys must be unique")

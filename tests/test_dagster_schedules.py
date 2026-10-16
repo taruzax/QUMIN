@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 
 import polars as pl
 
-from lab.core.config import IngestionConfig, IngestionStreamConfig, Timeframe
 import lab.platform.dagster.schedules as schedules
+from lab.core.config import IngestionConfig, IngestionStreamConfig, Timeframe
 from lab.platform.dagster.schedules import enabled_streams, stable_run_key
 
 
@@ -25,7 +25,8 @@ def test_schedule_request_uses_calendar_completed_bar_boundary(monkeypatch):
     boundary = datetime(2024, 1, 2, 21, tzinfo=timezone.utc)
     monkeypatch.setattr(schedules.IngestionConfig, "from_yaml", lambda *_args: config)
     monkeypatch.setattr(
-        schedules, "expected_bar_keys",
+        schedules,
+        "expected_bar_keys",
         lambda *_args, **_kwargs: pl.DataFrame({"bar_close_time": [boundary]}),
     )
     context = type("ScheduleContext", (), {"scheduled_execution_time": datetime(2024, 1, 2, 22, tzinfo=timezone.utc)})()

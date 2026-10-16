@@ -64,12 +64,22 @@ def test_stopping_loss_is_sample_weighted_with_a_final_partial_batch():
             return self.value.expand(len(features), 1)
 
     windows = WindowSet(
-        [np.ones((3, 1), dtype=np.float32)], np.zeros(3, dtype=np.int64), np.arange(3), 1,
+        [np.ones((3, 1), dtype=np.float32)],
+        np.zeros(3, dtype=np.int64),
+        np.arange(3),
+        1,
     )
     model = ConstantModel()
     _, stopping_history, _ = train_recurrent(
-        model, windows, np.zeros(3, dtype=np.float32), task="regression",
-        epochs=1, batch_size=2, learning_rate=0.01, seed=5, device="cpu",
+        model,
+        windows,
+        np.zeros(3, dtype=np.float32),
+        task="regression",
+        epochs=1,
+        batch_size=2,
+        learning_rate=0.01,
+        seed=5,
+        device="cpu",
         stopping_data=(windows, np.asarray([0.0, 0.0, 3.0], dtype=np.float32)),
     )
     prediction = float(model.value.detach().item())

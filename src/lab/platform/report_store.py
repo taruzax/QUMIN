@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -18,7 +18,15 @@ class ReportStore:
         self.root = Path(root) / "reports"
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def write_locator(self, *, report_path: str | Path, run_id: str, manifest_path: str | Path, evidence: dict[str, Any] | None = None, report_type: str = "development") -> dict[str, Any]:
+    def write_locator(
+        self,
+        *,
+        report_path: str | Path,
+        run_id: str,
+        manifest_path: str | Path,
+        evidence: dict[str, Any] | None = None,
+        report_type: str = "development",
+    ) -> dict[str, Any]:
         path = Path(report_path)
         if not path.exists():
             raise FileNotFoundError(f"Report does not exist: {path}")
@@ -56,8 +64,14 @@ class ReportStore:
         if locator_path.exists():
             existing = json.loads(locator_path.read_text())
             immutable_fields = (
-                "report_id", "report_checksum", "source_run_id", "source_manifest_path",
-                "source_manifest_checksum", "evidence", "report_type", "report_path",
+                "report_id",
+                "report_checksum",
+                "source_run_id",
+                "source_manifest_path",
+                "source_manifest_checksum",
+                "evidence",
+                "report_type",
+                "report_path",
             )
             if any(existing.get(field) != payload[field] for field in immutable_fields):
                 raise ValueError(f"Report locator identity collision: {payload['report_id']}")
@@ -73,8 +87,14 @@ class ReportStore:
             except FileExistsError:
                 existing = json.loads(locator_path.read_text())
                 immutable_fields = (
-                    "report_id", "report_checksum", "source_run_id", "source_manifest_path",
-                    "source_manifest_checksum", "evidence", "report_type", "report_path",
+                    "report_id",
+                    "report_checksum",
+                    "source_run_id",
+                    "source_manifest_path",
+                    "source_manifest_checksum",
+                    "evidence",
+                    "report_type",
+                    "report_path",
                 )
                 if any(existing.get(field) != payload[field] for field in immutable_fields):
                     raise ValueError(f"Report locator identity collision: {payload['report_id']}")

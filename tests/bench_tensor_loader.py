@@ -14,10 +14,7 @@ def make_bench_df(n_tickers: int = 17, n_periods: int = 2500, n_features: int = 
     np.random.seed(42)
     frames = []
     for ticker_index in range(n_tickers):
-        timestamps = [
-            datetime(2015, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
-            for index in range(n_periods)
-        ]
+        timestamps = [datetime(2015, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index) for index in range(n_periods)]
         data = {"timestamp": timestamps, "ticker": [f"TICK_{ticker_index}"] * n_periods}
         for feature_index in range(n_features):
             data[f"f{feature_index}"] = np.random.randn(n_periods).astype(np.float32)

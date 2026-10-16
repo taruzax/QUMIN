@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm, skew, kurtosis
+from scipy.stats import kurtosis, norm, skew
 
 from lab.core.contracts import MetricResult
 
@@ -42,14 +42,13 @@ def compound_session_returns(
     if xcals is None:
         raise ImportError("exchange_calendars is required to compound returns by session")
     exchange = xcals.get_calendar(calendar)
-    session_dates = [
-        exchange.minute_to_session(timestamp, direction="previous")
-        for timestamp in values.index
-    ]
+    session_dates = [exchange.minute_to_session(timestamp, direction="previous") for timestamp in values.index]
     frame = pd.DataFrame({"return": values.to_numpy(), "session": session_dates}, index=values.index)
-    return frame.groupby("session", sort=True)["return"].apply(
-        lambda row: float(np.prod(1.0 + row.to_numpy()) - 1.0)
-    ).rename("daily_return")
+    return (
+        frame.groupby("session", sort=True)["return"]
+        .apply(lambda row: float(np.prod(1.0 + row.to_numpy()) - 1.0))
+        .rename("daily_return")
+    )
 
 
 def statistical_returns(
@@ -168,7 +167,9 @@ def probabilistic_sharpe_ratio(
         z = (sharpe - threshold) * math.sqrt(stats["observations"] - 1) / math.sqrt(denominator)
         probability = float(norm.cdf(z))
         return MetricResult(
-            name="psr", value=probability, status="available",
+            name="psr",
+            value=probability,
+            status="available",
             inputs={**stats, "threshold": threshold, "uncertainty_denominator": denominator},
             conventions={"formula": "PSR", "returns": "net", "annualized": False},
         )
@@ -193,8 +194,11 @@ def deflated_sharpe_ratio(
         stats = sharpe_statistics(returns, frequency=frequency, min_observations=min_observations)
         if effective_trial_count == 1.0:
             return unavailable_metric(
-                "dsr", "DSR is not applicable for one trial; use PSR", **stats,
-                effective_trial_count=effective_trial_count, trial_sharpe_variance=trial_sharpe_variance,
+                "dsr",
+                "DSR is not applicable for one trial; use PSR",
+                **stats,
+                effective_trial_count=effective_trial_count,
+                trial_sharpe_variance=trial_sharpe_variance,
             )
         gamma = 0.5772156649015329
         variance_scale = math.sqrt(trial_sharpe_variance)
@@ -203,16 +207,28 @@ def deflated_sharpe_ratio(
             + gamma * norm.ppf(1.0 - 1.0 / (effective_trial_count * math.e))
         )
         result = probabilistic_sharpe_ratio(
-            returns, threshold=float(benchmark), frequency=frequency, min_observations=min_observations,
+            returns,
+            threshold=float(benchmark),
+            frequency=frequency,
+            min_observations=min_observations,
         )
         result.name = "dsr"
-        result.inputs.update({"benchmark": float(benchmark), "effective_trial_count": effective_trial_count, "trial_sharpe_variance": trial_sharpe_variance})
+        result.inputs.update(
+            {
+                "benchmark": float(benchmark),
+                "effective_trial_count": effective_trial_count,
+                "trial_sharpe_variance": trial_sharpe_variance,
+            }
+        )
         result.conventions.update({"formula": "DSR", "benchmark": "expected_maximum_normal_quantile"})
         return result
     except (TypeError, ValueError) as exc:
         return unavailable_metric(
-            "dsr", str(exc), frequency=frequency,
-            effective_trial_count=effective_trial_count, trial_sharpe_variance=trial_sharpe_variance,
+            "dsr",
+            str(exc),
+            frequency=frequency,
+            effective_trial_count=effective_trial_count,
+            trial_sharpe_variance=trial_sharpe_variance,
         )
 
 
@@ -228,12 +244,18 @@ def sharpe_evidence_metrics(
         values = _array(returns)
     except (TypeError, ValueError) as exc:
         unavailable = unavailable_metric("insufficient_evidence", str(exc), frequency=frequency)
-        return {"sharpe": unavailable_metric("sharpe", str(exc), frequency=frequency), "psr": unavailable_metric("psr", str(exc), frequency=frequency), "dsr": unavailable}
+        return {
+            "sharpe": unavailable_metric("sharpe", str(exc), frequency=frequency),
+            "psr": unavailable_metric("psr", str(exc), frequency=frequency),
+            "dsr": unavailable,
+        }
     psr = probabilistic_sharpe_ratio(values, frequency=frequency, min_observations=min_observations)
     sharpe = unavailable_metric("sharpe", "insufficient or degenerate returns", frequency=frequency)
     try:
         stats = sharpe_statistics(values, frequency=frequency, min_observations=min_observations)
-        sharpe = MetricResult(name="sharpe", value=stats["sharpe"], status="available", inputs=stats, conventions={"annualized": False})
+        sharpe = MetricResult(
+            name="sharpe", value=stats["sharpe"], status="available", inputs=stats, conventions={"annualized": False}
+        )
     except (TypeError, ValueError) as exc:
         sharpe = unavailable_metric("sharpe", str(exc), frequency=frequency)
     if trial_sharpes is None or len(trial_sharpes) <= 1:

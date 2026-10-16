@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import torch  # noqa: F401
-
 from datetime import datetime
 
 import numpy as np
 import polars as pl
 import pytest
+import torch  # noqa: F401
 
 # pyrefly: ignore [missing-import]
 from src.lab.core.config import PipelineConfig

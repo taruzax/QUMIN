@@ -121,14 +121,12 @@ def test_asset_materialization_synthetic(tmp_path):
 
         for asset in expected_assets:
             assert asset in materialized_keys
+
+
 def test_supported_dagster_definitions_are_ingestion_only():
     from lab.platform.dagster import defs
 
-    names = {
-        key.to_user_string()
-        for asset_definition in defs.assets
-        for key in asset_definition.keys
-    }
+    names = {key.to_user_string() for asset_definition in defs.assets for key in asset_definition.keys}
     assert names == {"ingestion_publication"}
     assert {spec.name for check in defs.asset_checks for spec in check.check_specs} == {"ingestion_calendar_coverage"}
     assert {schedule.name for schedule in defs.schedules} == {

@@ -33,4 +33,5 @@ class EvidenceStore:
         expected = evidence_id.removeprefix("evidence-")
         if not evidence_id.startswith("evidence-") or not hashlib.sha256(payload).hexdigest().startswith(expected):
             raise ValueError(f"Evidence sidecar checksum mismatch: {evidence_id}")
-        return json.loads(payload)
+        result: dict[str, Any] = json.loads(payload)
+        return result

@@ -78,17 +78,28 @@ def test_fold_predictions_include_unresolved_tail_while_scoring_only_resolved_ke
         }
     )
     snapshot = MarketSnapshot(
-        snapshot_id="fixture", snapshot_hash="fixture", bars=features,
-        ticker_order=("AAA",), calendar="XNYS", timeframe=Timeframe.D1,
+        snapshot_id="fixture",
+        snapshot_hash="fixture",
+        bars=features,
+        ticker_order=("AAA",),
+        calendar="XNYS",
+        timeframe=Timeframe.D1,
     )
     config = PipelineConfig(tensor={"sequence_len": 3, "batch_size": 2})
     dataset = PreparedDataset(
-        snapshot=snapshot, features=features, feature_specification=("volume",),
-        labels=labels, split_plan={}, config=config,
+        snapshot=snapshot,
+        features=features,
+        feature_specification=("volume",),
+        labels=labels,
+        split_plan={},
+        config=config,
     )
     fold = FoldSpec(
-        fold_id=0, train_start=timestamps[0], train_end=timestamps[5],
-        validation_start=timestamps[5], validation_end=timestamps[9],
+        fold_id=0,
+        train_start=timestamps[0],
+        train_end=timestamps[5],
+        validation_start=timestamps[5],
+        validation_end=timestamps[9],
     )
 
     bundle = prepare_fold(dataset, fold)
@@ -102,8 +113,11 @@ def test_fold_predictions_include_unresolved_tail_while_scoring_only_resolved_ke
     holdout = prepare_fold(
         dataset,
         FoldSpec(
-            fold_id=-1, train_start=timestamps[0], train_end=timestamps[7],
-            validation_start=timestamps[9], validation_end=start + timedelta(days=12),
+            fold_id=-1,
+            train_start=timestamps[0],
+            train_end=timestamps[7],
+            validation_start=timestamps[9],
+            validation_end=start + timedelta(days=12),
         ),
     )
 

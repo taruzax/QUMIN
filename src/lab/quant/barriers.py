@@ -10,9 +10,7 @@ def barrier_prices(entry_price: float, volatility: float, config: TaskConfig) ->
     )
 
 
-def first_barrier_touch(
-    closes: list[float], upper: float, lower: float
-) -> tuple[int | None, int]:
+def first_barrier_touch(closes: list[float], upper: float, lower: float) -> tuple[int | None, int]:
     """Find the first close touch, with deterministic upper precedence on ties."""
     for offset, close in enumerate(closes):
         if close >= upper:

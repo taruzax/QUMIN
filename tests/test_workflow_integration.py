@@ -32,8 +32,8 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
     # workflow. The hourly integration stays smaller; its standalone smoke uses defaults.
     overrides = (
         {"models": {"early_stopping": True, "early_stopping_fraction": 0.20, "early_stopping_patience": 2}}
-        if timeframe == Timeframe.D1 else
-        {"models": {"xgboost": {"enabled": False}}}
+        if timeframe == Timeframe.D1
+        else {"models": {"xgboost": {"enabled": False}}}
     )
     config = PipelineConfig.from_yaml("config/demo.yaml", overrides=overrides).model_dump(mode="json")
     config["data"]["input_path"] = str(Path("data/demo/ohlcv.csv").resolve())
@@ -46,11 +46,7 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
         timeframe=timeframe.value if timeframe == Timeframe.H1 else None,
     )
 
-    output = dict(
-        line.split("=", 1)
-        for line in capsys.readouterr().out.splitlines()
-        if "=" in line
-    )
+    output = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines() if "=" in line)
     development_id = output["development_run_id"]
     holdout_id = output["holdout_run_id"]
     development = load_run(development_id, artifacts_dir=artifacts)
@@ -84,12 +80,14 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
     assert evidence_metrics
     assert all(metric.conventions["return_convention"] == convention for metric in evidence_metrics)
     native_count = len(development.backtest.net_returns)
-    statistical_count = len(statistical_returns(
-        development.backtest.equity.get_column("timestamp").to_list(),
-        development.backtest.net_returns.to_numpy(),
-        frequency=frequency,
-        calendar=development.snapshot.calendar,
-    ))
+    statistical_count = len(
+        statistical_returns(
+            development.backtest.equity.get_column("timestamp").to_list(),
+            development.backtest.net_returns.to_numpy(),
+            frequency=frequency,
+            calendar=development.snapshot.calendar,
+        )
+    )
     if timeframe == Timeframe.H1 and frequency == "daily":
         assert statistical_count < native_count
     ledger = TrialLedger(artifacts / "trials.sqlite")
@@ -102,11 +100,17 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
     assert trial["settings"]["calendar"] == development.snapshot.calendar
     assert attempt["result"]["return_convention"] == convention
     assert len(attempt["result"]["development_net_returns"]) == statistical_count
-    assert development.artifact_manifest["predicted_coverage"]["total"] >= development.artifact_manifest["scored_coverage"]["total"] > 0
+    assert (
+        development.artifact_manifest["predicted_coverage"]["total"]
+        >= development.artifact_manifest["scored_coverage"]["total"]
+        > 0
+    )
     assert sum(len(frame.keys) for frame in candidate_predictions) == development.artifact_manifest["predicted_coverage"]["total"]
     assert development.snapshot is not None
     assert holdout.ref.parent_run_id == development_id
-    holdout_selection = next(item["selected_model"] for item in holdout.artifact_manifest["candidates"] if item.get("selected_model"))
+    holdout_selection = next(
+        item["selected_model"] for item in holdout.artifact_manifest["candidates"] if item.get("selected_model")
+    )
     assert holdout_selection == output["selected_model"]
     assert saved_variant.ref.parent_run_id == development_id
     assert report.is_file() and report.stat().st_size > 0

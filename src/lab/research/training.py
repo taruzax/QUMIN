@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import math
 import platform
-from importlib.metadata import PackageNotFoundError, version
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 import polars as pl
@@ -36,9 +36,7 @@ def build_inner_stopping_data(
     config: PipelineConfig,
 ) -> InnerStoppingData:
     """Build an inner chronological train/stopping split before outer preprocessing."""
-    candidates = dataset.labels.filter(
-        (pl.col("decision_time") >= fold.train_start) & (pl.col("decision_time") < fold.train_end)
-    )
+    candidates = dataset.labels.filter((pl.col("decision_time") >= fold.train_start) & (pl.col("decision_time") < fold.train_end))
     timestamps = sorted(set(candidates.get_column("decision_time").to_list()))
     if len(timestamps) < 2:
         raise ValueError("C15 early stopping requires at least two unique training decision timestamps")

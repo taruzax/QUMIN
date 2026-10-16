@@ -1,15 +1,29 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+  - repo: local
     hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-      - id: ruff-format
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
-    hooks:
-      - id: mypy
-        additional_dependencies: ["types-PyYAML"]
+      - id: ruff-lint
+        name: Ruff lint (GitHub Actions)
+        entry: uv run --extra dev ruff check .
+        language: system
         pass_filenames: false
-        entry: mypy -p lab
+        always_run: true
+
+      - id: ruff-format
+        name: Ruff format staged Python and notebook files
+        entry: uv run --extra dev ruff format
+        language: system
+        files: \.(py|ipynb)$
+
+      - id: mypy
+        name: Mypy type check (GitHub Actions)
+        entry: uv run --extra dev mypy -p lab --exclude risk_engine/cla.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest
+        name: Pytest with coverage (GitHub Actions)
+        entry: uv run --extra dev pytest --cov=src --cov-fail-under=80
+        language: system
+        pass_filenames: false
+        always_run: true

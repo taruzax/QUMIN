@@ -1,9 +1,8 @@
 import polars as pl
 import pytest
 
-from lab.core.config import Timeframe
+from lab.core.config import PipelineConfig, Timeframe
 from lab.platform.data_access import build_market_snapshot, consolidate_partitions, load_market_snapshot
-from lab.core.config import PipelineConfig
 from lab.quant.timing import bar_times_for_session
 
 

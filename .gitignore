@@ -10,6 +10,9 @@ log.md
 /earning_calls_ONHOLD
 /notebooks/*
 !notebooks/research_walkthrough.ipynb
+!notebooks/quant_algorithms_walkthrough.ipynb
+!notebooks/quant_sins_and_corruption_test.ipynb
+!notebooks/orderbook_exploration.ipynb
 # local data files
 *.parquet
 *.jsonl
@@ -25,3 +28,6 @@ data/dagster/
 checkpoints/
 *.html
 *mlruns
+.coverage
+.coverage.*
+coverage.xml

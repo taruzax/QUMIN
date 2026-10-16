@@ -4,7 +4,7 @@ import json
 import pathlib
 import time
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Literal, cast
 
 import pandas as pd
 import polars as pl
@@ -216,7 +216,7 @@ def canonicalize_bars(
                     row["timestamp"],
                     calendar,
                     timeframe,
-                    role=timestamp_role,
+                    role=cast(Literal["session_date", "bar_open", "bar_close"], timestamp_role),
                     timezone_name=timezone_name,
                 )
         except (TypeError, ValueError) as exc:
@@ -298,7 +298,6 @@ def consolidate_partitions(
     if not frames:
         raise DataValidationError("No market-data partitions were supplied")
     combined = pl.concat(frames, how="diagonal_relaxed").sort(["ticker", "bar_open_time"])
-    keys = ("ticker", "bar_open_time")
     unique: dict[tuple[Any, Any], dict[str, Any]] = {}
     duplicate_count = 0
     compare_columns = [column for column in combined.columns if column != "raw_bar_index"]

@@ -34,22 +34,38 @@ def test_next_open_order_uses_open_price_liquidates_and_preserves_nominal_freque
         }
     )
     snapshot = MarketSnapshot(
-        snapshot_id="fixture", snapshot_hash="fixture", bars=bars,
-        ticker_order=("AAA",), calendar="XNYS", timeframe=timeframe,
+        snapshot_id="fixture",
+        snapshot_hash="fixture",
+        bars=bars,
+        ticker_order=("AAA",),
+        calendar="XNYS",
+        timeframe=timeframe,
     )
     prediction = PredictionFrame(
         keys=(SampleKey(ticker="AAA", timestamp=closes[0]),),
-        model_ref="fixture", fold_ref="fixture", predictions=np.array([0.5]),
+        model_ref="fixture",
+        fold_ref="fixture",
+        predictions=np.array([0.5]),
     )
     allocation = AllocationFrame(
-        decision_time=closes[0], valid_from=opens[1], ticker_budgets={"AAA": 0.2}, config_hash="fixture",
+        decision_time=closes[0],
+        valid_from=opens[1],
+        ticker_budgets={"AAA": 0.2},
+        config_hash="fixture",
     )
     period = ExecutionPeriod(
-        name="fixture", first_decision=closes[0], last_decision=closes[2], final_liquidation_open=opens[3],
+        name="fixture",
+        first_decision=closes[0],
+        last_decision=closes[2],
+        final_liquidation_open=opens[3],
     )
     result = simulate_strategy(
-        snapshot, prediction, (allocation,), TaskConfig(kind="regression"),
-        BacktestConfig(initial_capital=1_000.0, fees_bps=0.0), period,
+        snapshot,
+        prediction,
+        (allocation,),
+        TaskConfig(kind="regression"),
+        BacktestConfig(initial_capital=1_000.0, fees_bps=0.0),
+        period,
     )
     assert result.orders.height == 2
     assert result.orders["price"].to_list() == [110.0, 120.0]
@@ -66,31 +82,48 @@ def test_prices_after_execution_period_cannot_change_trade_keys_or_return_path()
     closes = [value + timedelta(hours=6) for value in opens]
     prediction = PredictionFrame(
         keys=(SampleKey(ticker="AAA", timestamp=closes[0]),),
-        model_ref="fixture", fold_ref="0", predictions=np.asarray([0.5]),
+        model_ref="fixture",
+        fold_ref="0",
+        predictions=np.asarray([0.5]),
     )
     allocation = AllocationFrame(
-        decision_time=closes[0], valid_from=opens[1], ticker_budgets={"AAA": 0.2}, config_hash="fixture",
+        decision_time=closes[0],
+        valid_from=opens[1],
+        ticker_budgets={"AAA": 0.2},
+        config_hash="fixture",
     )
     period = ExecutionPeriod(
-        name="development", first_decision=closes[0], last_decision=closes[0],
+        name="development",
+        first_decision=closes[0],
+        last_decision=closes[0],
         final_liquidation_open=opens[3],
     )
 
     def simulate(prices):
-        bars = pl.DataFrame({
-            "ticker": ["AAA"] * len(opens),
-            "bar_open_time": opens,
-            "timestamp": closes,
-            "open": prices,
-            "close": prices,
-        })
+        bars = pl.DataFrame(
+            {
+                "ticker": ["AAA"] * len(opens),
+                "bar_open_time": opens,
+                "timestamp": closes,
+                "open": prices,
+                "close": prices,
+            }
+        )
         snapshot = MarketSnapshot(
-            snapshot_id="causal-fixture", snapshot_hash="causal-fixture", bars=bars,
-            ticker_order=("AAA",), calendar="XNYS", timeframe=Timeframe.D1,
+            snapshot_id="causal-fixture",
+            snapshot_hash="causal-fixture",
+            bars=bars,
+            ticker_order=("AAA",),
+            calendar="XNYS",
+            timeframe=Timeframe.D1,
         )
         return simulate_strategy(
-            snapshot, prediction, (allocation,), TaskConfig(kind="regression"),
-            BacktestConfig(initial_capital=1_000.0, fees_bps=0.0), period,
+            snapshot,
+            prediction,
+            (allocation,),
+            TaskConfig(kind="regression"),
+            BacktestConfig(initial_capital=1_000.0, fees_bps=0.0),
+            period,
         )
 
     baseline = simulate([100.0, 110.0, 120.0, 130.0, 140.0])
@@ -117,8 +150,12 @@ def _run_allocations(tickers, allocation_specs, *, capital=1_000.0, fees_bps=0.0
         }
     )
     snapshot = MarketSnapshot(
-        snapshot_id="execution-fixture", snapshot_hash="execution-fixture", bars=bars,
-        ticker_order=tuple(tickers), calendar="XNYS", timeframe=Timeframe.D1,
+        snapshot_id="execution-fixture",
+        snapshot_hash="execution-fixture",
+        bars=bars,
+        ticker_order=tuple(tickers),
+        calendar="XNYS",
+        timeframe=Timeframe.D1,
     )
     keys, predictions, allocations = [], [], []
     for decision_index, budgets, directions, diagnostics in allocation_specs:
@@ -127,21 +164,33 @@ def _run_allocations(tickers, allocation_specs, *, capital=1_000.0, fees_bps=0.0
             predictions.append(float(directions.get(ticker, 1)))
         allocations.append(
             AllocationFrame(
-                decision_time=closes[decision_index], valid_from=opens[decision_index + 1],
-                ticker_budgets=budgets, config_hash="fixture", diagnostics=diagnostics,
+                decision_time=closes[decision_index],
+                valid_from=opens[decision_index + 1],
+                ticker_budgets=budgets,
+                config_hash="fixture",
+                diagnostics=diagnostics,
             )
         )
     prediction = PredictionFrame(
-        keys=tuple(keys), model_ref="fixture", fold_ref="fixture", predictions=np.asarray(predictions),
+        keys=tuple(keys),
+        model_ref="fixture",
+        fold_ref="fixture",
+        predictions=np.asarray(predictions),
     )
     last_decision = closes[max(spec[0] for spec in allocation_specs)]
     period = ExecutionPeriod(
-        name="fixture", first_decision=closes[0], last_decision=last_decision,
+        name="fixture",
+        first_decision=closes[0],
+        last_decision=last_decision,
         final_liquidation_open=opens[3],
     )
     return simulate_strategy(
-        snapshot, prediction, tuple(allocations), TaskConfig(kind="regression"),
-        BacktestConfig(initial_capital=capital, fees_bps=fees_bps), period,
+        snapshot,
+        prediction,
+        tuple(allocations),
+        TaskConfig(kind="regression"),
+        BacktestConfig(initial_capital=capital, fees_bps=fees_bps),
+        period,
     )
 
 
@@ -181,7 +230,9 @@ def test_negative_delta_sells_before_alphabetically_earlier_new_buy():
 )
 def test_fee_bearing_orders_fit_exact_and_near_cash_boundaries(weight, expected_quantity):
     result = _run_allocations(
-        ("AAA",), [(0, {"AAA": weight}, {"AAA": 1}, {"gross_limit": 2.0})], fees_bps=100.0,
+        ("AAA",),
+        [(0, {"AAA": weight}, {"AAA": 1}, {"gross_limit": 2.0})],
+        fees_bps=100.0,
     )
     entry = result.orders.filter(pl.col("reason") == "entry").row(0, named=True)
     assert entry["quantity"] == pytest.approx(expected_quantity, rel=1e-10)
@@ -210,7 +261,10 @@ def test_long_exit_short_cover_and_new_entry_share_one_cash_safe_rebalance():
     ],
 )
 def test_reversals_are_ordered_by_their_actual_delta(
-    initial_direction, next_direction, expected_tickers, expected_quantities,
+    initial_direction,
+    next_direction,
+    expected_tickers,
+    expected_quantities,
 ):
     result = _run_allocations(
         ("AAA", "ZZZ"),

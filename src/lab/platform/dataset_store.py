@@ -9,7 +9,6 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 
@@ -34,8 +33,12 @@ class DatasetStore:
         feature_spec_hash: str | None = None,
         split_hash: str,
     ) -> PreparedDatasetRef:
-        effective_config_hash = config_hash or (dataset.config.resolved_config_hash if isinstance(dataset.config, PipelineConfig) else "unresolved")
-        effective_feature_hash = feature_spec_hash or hashlib.sha256(canonical_json_bytes(dataset.feature_specification)).hexdigest()
+        effective_config_hash = config_hash or (
+            dataset.config.resolved_config_hash if isinstance(dataset.config, PipelineConfig) else "unresolved"
+        )
+        effective_feature_hash = (
+            feature_spec_hash or hashlib.sha256(canonical_json_bytes(dataset.feature_specification)).hexdigest()
+        )
         identity = {
             "snapshot_hash": dataset.snapshot.snapshot_hash,
             "config_hash": effective_config_hash,
@@ -61,7 +64,11 @@ class DatasetStore:
                 exclusions_format = "json"
             checksums = {
                 name: sha256_file(staging / name)
-                for name in ("features.parquet", "labels.parquet", "exclusions.parquet" if exclusions_format == "parquet" else "exclusions.json")
+                for name in (
+                    "features.parquet",
+                    "labels.parquet",
+                    "exclusions.parquet" if exclusions_format == "parquet" else "exclusions.json",
+                )
             }
             manifest = {
                 "schema_version": "prepared-dataset-bundle.v1",
@@ -70,7 +77,9 @@ class DatasetStore:
                 "snapshot_hash": dataset.snapshot.snapshot_hash,
                 "config_hash": effective_config_hash,
                 "config_schema_version": PIPELINE_CONFIG_SCHEMA_VERSION if isinstance(dataset.config, PipelineConfig) else None,
-                "config_source_provenance": dataset.config.source_provenance if isinstance(dataset.config, PipelineConfig) else None,
+                "config_source_provenance": dataset.config.source_provenance
+                if isinstance(dataset.config, PipelineConfig)
+                else None,
                 "feature_spec_hash": effective_feature_hash,
                 "split_hash": split_hash,
                 "feature_specification": dataset.feature_specification,
@@ -114,7 +123,11 @@ class DatasetStore:
         manifest = json.loads((bundle / "manifest.json").read_text())
         snapshot = SnapshotCatalog(self.snapshot_root).load(reference.snapshot_id)
         exclusions_path = bundle / ("exclusions.parquet" if manifest["exclusions_format"] == "parquet" else "exclusions.json")
-        exclusions = pl.read_parquet(exclusions_path) if manifest["exclusions_format"] == "parquet" else json.loads(exclusions_path.read_text())
+        exclusions = (
+            pl.read_parquet(exclusions_path)
+            if manifest["exclusions_format"] == "parquet"
+            else json.loads(exclusions_path.read_text())
+        )
         return PreparedDataset(
             snapshot=snapshot,
             features=pl.read_parquet(bundle / "features.parquet"),
@@ -128,7 +141,8 @@ class DatasetStore:
                     schema_version=manifest.get("config_schema_version"),
                     expected_hash=manifest.get("config_hash"),
                 )
-                if manifest.get("config") else None
+                if manifest.get("config")
+                else None
             ),
         )
 

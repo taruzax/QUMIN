@@ -1,4 +1,3 @@
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +8,6 @@ import yaml
 
 from lab.core.config import Timeframe
 from lab.quant.timing import bar_times_for_session, get_exchange_calendar
-
 
 DEMO_TICKERS = ("ALFA", "BRAV", "CHAR", "DELT", "ECHO")
 DEMO_SEED = 42

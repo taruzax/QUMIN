@@ -10,14 +10,23 @@ import lab.research.reporting as reporting
 from lab.core.config import PipelineConfig
 from lab.core.contracts import MetricResult
 from lab.platform.artifacts import sha256_file
-from lab.research.reporting import compound_session_returns, equity_statistics, generate_demo_report, generate_local_report, generate_run_report, write_demo_locator
 from lab.platform.report_store import ReportStore
+from lab.quant.metrics import compound_session_returns
+from lab.research.reporting import (
+    equity_statistics,
+    generate_demo_report,
+    generate_local_report,
+    generate_run_report,
+    write_demo_locator,
+)
 
 
 def test_reporting_compounds_returns_and_writes_local_html(tmp_path):
     timestamps = ["2024-01-02T15:00:00Z", "2024-01-02T16:00:00Z", "2024-01-03T15:00:00Z"]
     daily = compound_session_returns(timestamps, [0.01, 0.02, -0.01])
-    report = generate_local_report(tmp_path / "report.html", net_returns=np.array([0.01, -0.01]), gross_returns=np.array([0.02, -0.005]), frequency="native")
+    report = generate_local_report(
+        tmp_path / "report.html", net_returns=np.array([0.01, -0.01]), gross_returns=np.array([0.02, -0.005]), frequency="native"
+    )
 
     assert len(daily) == 2
     assert daily.iloc[0] == pytest.approx(0.01 * 1.02 + 0.02)
@@ -69,8 +78,10 @@ def test_quantstats_always_receives_session_daily_returns_when_configured_native
         net_returns=[0.01, 0.02, 0.03, -0.01],
         gross_returns=[0.02, 0.03, 0.04, -0.02],
         timestamps=[
-            "2024-01-02T15:00:00Z", "2024-01-02T16:00:00Z",
-            "2024-01-03T15:00:00Z", "2024-01-03T16:00:00Z",
+            "2024-01-02T15:00:00Z",
+            "2024-01-02T16:00:00Z",
+            "2024-01-03T15:00:00Z",
+            "2024-01-03T16:00:00Z",
         ],
         frequency="native",
     )
@@ -81,16 +92,24 @@ def test_quantstats_always_receives_session_daily_returns_when_configured_native
 
 def _fake_run(run_id, *, all_cash):
     timestamps = ["2024-01-02T15:00:00Z", "2024-01-03T15:00:00Z"]
-    orders = pl.DataFrame({
-        "timestamp": [timestamps[0]] if not all_cash else [],
-        "ticker": ["ALFA"] if not all_cash else [],
-        "quantity": [1.0] if not all_cash else [],
-        "price": [100.0] if not all_cash else [],
-        "side": ["buy"] if not all_cash else [],
-        "reason": ["entry"] if not all_cash else [],
-        "fees": [0.5] if not all_cash else [],
-    })
-    equity = pl.DataFrame({"timestamp": timestamps, "equity": [100.0, 100.0 if all_cash else 101.0], "gross_equity": [100.0, 100.0 if all_cash else 101.5]})
+    orders = pl.DataFrame(
+        {
+            "timestamp": [timestamps[0]] if not all_cash else [],
+            "ticker": ["ALFA"] if not all_cash else [],
+            "quantity": [1.0] if not all_cash else [],
+            "price": [100.0] if not all_cash else [],
+            "side": ["buy"] if not all_cash else [],
+            "reason": ["entry"] if not all_cash else [],
+            "fees": [0.5] if not all_cash else [],
+        }
+    )
+    equity = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "equity": [100.0, 100.0 if all_cash else 101.0],
+            "gross_equity": [100.0, 100.0 if all_cash else 101.5],
+        }
+    )
     backtest = SimpleNamespace(
         orders=orders,
         equity=equity,
@@ -98,11 +117,15 @@ def _fake_run(run_id, *, all_cash):
         gross_returns=pl.Series("gross_returns", [0.0, 0.0 if all_cash else 0.015]),
     )
     return SimpleNamespace(
-        ref=SimpleNamespace(run_id=run_id, snapshot_hash="snapshot-hash", config_hash="config-hash", split_hash="split-hash", parent_run_id=None),
+        ref=SimpleNamespace(
+            run_id=run_id, snapshot_hash="snapshot-hash", config_hash="config-hash", split_hash="split-hash", parent_run_id=None
+        ),
         predictions=(),
         backtest=backtest,
         metrics=(MetricResult(name="sharpe", value=None, status="unavailable", reason="constant returns"),),
-        snapshot=SimpleNamespace(timeframe=SimpleNamespace(value="1d"), calendar="XNYS", provenance={"source": "bundled_demo", "label": "<synthetic>"}),
+        snapshot=SimpleNamespace(
+            timeframe=SimpleNamespace(value="1d"), calendar="XNYS", provenance={"source": "bundled_demo", "label": "<synthetic>"}
+        ),
         artifact_manifest={"candidates": [{"model": "baseline", "status": "completed"}], "artifacts": [{"path": "metrics.json"}]},
     )
 
@@ -114,8 +137,17 @@ def test_demo_report_and_locator_keep_all_cash_honest_and_manifest_unchanged(tmp
     holdout = _fake_run("holdout-1", all_cash=False)
     original_manifest = repr(development.artifact_manifest)
     config = PipelineConfig()
-    report = generate_demo_report(tmp_path / "dev-1.html", development=development, holdout=holdout, config=config, selected_model="baseline")
-    locator = write_demo_locator(tmp_path / "dev-1.locator.json", development=development, holdout=holdout, report_path=report, selected_model="baseline", artifacts_root=tmp_path / "artifacts")
+    report = generate_demo_report(
+        tmp_path / "dev-1.html", development=development, holdout=holdout, config=config, selected_model="baseline"
+    )
+    locator = write_demo_locator(
+        tmp_path / "dev-1.locator.json",
+        development=development,
+        holdout=holdout,
+        report_path=report,
+        selected_model="baseline",
+        artifacts_root=tmp_path / "artifacts",
+    )
     content = report.read_text()
 
     assert report.exists()
@@ -149,12 +181,8 @@ def test_report_locator_is_idempotent_and_verifies_all_references(tmp_path):
         "sha256": sha256_file(evidence),
     }
 
-    first = store.write_locator(
-        report_path=report, run_id="run-1", manifest_path=manifest, evidence=evidence_ref
-    )
-    second = store.write_locator(
-        report_path=report, run_id="run-1", manifest_path=manifest, evidence=evidence_ref
-    )
+    first = store.write_locator(report_path=report, run_id="run-1", manifest_path=manifest, evidence=evidence_ref)
+    second = store.write_locator(report_path=report, run_id="run-1", manifest_path=manifest, evidence=evidence_ref)
 
     assert first["report_id"] == second["report_id"]
     assert store.load_locator(first["report_id"])["source_run_id"] == "run-1"
@@ -169,7 +197,9 @@ def test_generic_report_includes_identity_costs_evidence_and_escapes_metadata(tm
     result.backtest.turnover = pl.Series("turnover", [2.0, 3.0])
     result.snapshot.provenance = {"source": "<provider>"}
     path = generate_run_report(
-        tmp_path / "generic.html", result=result, config=PipelineConfig(),
+        tmp_path / "generic.html",
+        result=result,
+        config=PipelineConfig(),
         evidence={"excluded": "<script>alert(1)</script>"},
     )
     content = path.read_text()
@@ -188,11 +218,13 @@ def test_period_summary_recomputes_requested_returns_with_snapshot_calendar(monk
         "2024-07-03T16:00:00Z",
         "2024-07-04T15:00:00Z",
     ]
-    result.backtest.equity = pl.DataFrame({
-        "timestamp": hourly_timestamps,
-        "equity": [100.0, 101.0, 103.0],
-        "gross_equity": [100.0, 102.0, 105.0],
-    })
+    result.backtest.equity = pl.DataFrame(
+        {
+            "timestamp": hourly_timestamps,
+            "equity": [100.0, 101.0, 103.0],
+            "gross_equity": [100.0, 102.0, 105.0],
+        }
+    )
     result.backtest.net_returns = pl.Series("net_returns", [0.01, 0.02, 0.03])
     result.backtest.gross_returns = pl.Series("gross_returns", [0.02, 0.03, 0.04])
     result.snapshot.calendar = "XHKG"
@@ -205,8 +237,12 @@ def test_period_summary_recomputes_requested_returns_with_snapshot_calendar(monk
 
     monkeypatch.setattr(reporting, "statistical_returns", capture)
     summary = reporting._period_summary(
-        "Development", result, frequency="daily", min_observations=30,
-        fees_bps=0.0, slippage_bps=0.0,
+        "Development",
+        result,
+        frequency="daily",
+        min_observations=30,
+        fees_bps=0.0,
+        slippage_bps=0.0,
     )
 
     assert calls == [("daily", "XHKG"), ("daily", "XHKG"), ("daily", "XHKG")]

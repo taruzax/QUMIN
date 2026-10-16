@@ -116,7 +116,8 @@ def compute_labels(snapshot: MarketSnapshot, task_config: TaskConfig) -> LabelRe
                 )
                 continue
 
-            if volatility[index] is None:
+            event_volatility = volatility[index]
+            if event_volatility is None:
                 exclusions.append({"ticker": ticker_name, "decision_time": decision_time, "reason": "warmup"})
                 continue
             expiry = task_config.triple_barrier.expiry_bars
@@ -127,7 +128,7 @@ def compute_labels(snapshot: MarketSnapshot, task_config: TaskConfig) -> LabelRe
                 continue
             entry = rows[entry_index]
             entry_price = float(entry["open"])
-            upper, lower = barrier_prices(entry_price, float(volatility[index]), task_config)
+            upper, lower = barrier_prices(entry_price, float(event_volatility), task_config)
             touch_offset, direction = first_barrier_touch(
                 [float(rows[offset]["close"]) for offset in range(entry_index, expiry_index + 1)], upper, lower
             )
@@ -149,7 +150,7 @@ def compute_labels(snapshot: MarketSnapshot, task_config: TaskConfig) -> LabelRe
                     "t1": execution.get("bar_open_time", execution[time_column]),
                     "label": direction,
                     "target": direction,
-                    "volatility": float(volatility[index]),
+                    "volatility": float(event_volatility),
                     "upper_barrier": upper,
                     "lower_barrier": lower,
                 }

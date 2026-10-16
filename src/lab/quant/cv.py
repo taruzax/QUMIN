@@ -38,8 +38,7 @@ class PurgedKFold(_BaseKFold):
     def _as_polars(values, name: str) -> pl.Series:
         if not isinstance(values, pl.Series):
             raise TypeError(
-                f"{name} must be a polars Series, got {type(values).__name__}. "
-                "Wrap it with pl.Series(...) before passing it in."
+                f"{name} must be a polars Series, got {type(values).__name__}. Wrap it with pl.Series(...) before passing it in."
             )
         return values.rename(name)
 
@@ -198,7 +197,5 @@ def purge_by_information_interval(
 
 def fold_training_labels(labels: pl.DataFrame, fold: FoldSpec) -> pl.DataFrame:
     """Select chronological training labels and apply equality-safe purging."""
-    candidates = labels.filter(
-        (pl.col("decision_time") >= fold.train_start) & (pl.col("decision_time") < fold.train_end)
-    )
+    candidates = labels.filter((pl.col("decision_time") >= fold.train_start) & (pl.col("decision_time") < fold.train_end))
     return purge_training_labels(candidates, fold.validation_start)

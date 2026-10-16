@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import mlflow
+
 from lab.models.baseline import EmpiricalPriorBaseline, ZeroForecastBaseline
 from lab.models.registry import create_model
 

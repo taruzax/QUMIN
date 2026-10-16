@@ -120,7 +120,8 @@ def validate_canonical_bars(
             raise DataValidationError(f"{column} must use a timezone-aware datetime dtype")
         if require_timezone and not _timezone_aware_dtype(df[column].dtype):
             raise DataValidationError(f"{column} must be timezone-aware UTC")
-    if df["timestamp"].dtype.time_zone != "UTC":
+    timestamp_dtype = df["timestamp"].dtype
+    if not isinstance(timestamp_dtype, pl.Datetime) or timestamp_dtype.time_zone != "UTC":
         raise DataValidationError("Canonical timestamps must use UTC")
     if df.filter(pl.col("timestamp") != pl.col("bar_close_time")).height:
         raise DataValidationError("timestamp must equal bar_close_time")

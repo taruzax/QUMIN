@@ -6,14 +6,14 @@ from torch import nn
 
 from lab.core.config import PipelineConfig
 from lab.models.devices import resolve_device
-from lab.models.trainer import seed_torch
-from lab.models.trainer import train_recurrent
+from lab.models.trainer import seed_torch, train_recurrent
 from lab.research.training import _new_model
 
 
 def test_device_resolution_falls_back_to_cpu_when_no_accelerator_is_available():
-    with patch("lab.models.devices.torch.cuda.is_available", return_value=False), patch(
-        "lab.models.devices.torch.backends.mps.is_available", return_value=False
+    with (
+        patch("lab.models.devices.torch.cuda.is_available", return_value=False),
+        patch("lab.models.devices.torch.backends.mps.is_available", return_value=False),
     ):
         resolution = resolve_device("gru", "auto")
 
@@ -85,8 +85,15 @@ def test_recurrent_accelerator_training_and_prediction_smoke(device, available):
     y = X[:, -1, 0] * 0.5 - X[:, -1, 1] * 0.25
     try:
         history, stopping_history, selected_epoch = train_recurrent(
-            model, X, y, task="regression", epochs=2, batch_size=4,
-            learning_rate=0.01, seed=11, device=device,
+            model,
+            X,
+            y,
+            task="regression",
+            epochs=2,
+            batch_size=4,
+            learning_rate=0.01,
+            seed=11,
+            device=device,
         )
         model.eval()
         with torch.no_grad():

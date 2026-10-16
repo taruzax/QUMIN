@@ -21,7 +21,10 @@ def test_early_close_and_short_final_hour_are_explicit():
 
 def test_expected_daily_keys_skip_holiday_and_only_include_completed_sessions():
     expected = expected_bar_keys(
-        "XNYS", Timeframe.D1, "2024-01-01T00:00:00+00:00", "2024-01-03T00:00:00+00:00",
+        "XNYS",
+        Timeframe.D1,
+        "2024-01-01T00:00:00+00:00",
+        "2024-01-03T00:00:00+00:00",
         now=datetime(2024, 1, 3, 23, tzinfo=timezone.utc),
     )
 
@@ -30,7 +33,10 @@ def test_expected_daily_keys_skip_holiday_and_only_include_completed_sessions():
 
 def test_expected_daily_keys_do_not_invent_weekend_sessions():
     expected = expected_bar_keys(
-        "XNYS", Timeframe.D1, "2024-01-06T00:00:00+00:00", "2024-01-08T23:00:00+00:00",
+        "XNYS",
+        Timeframe.D1,
+        "2024-01-06T00:00:00+00:00",
+        "2024-01-08T23:00:00+00:00",
         now=datetime(2024, 1, 9, 0, tzinfo=timezone.utc),
     )
 

@@ -29,11 +29,7 @@ def test_demo_explicitly_sets_task_and_stopping_policy():
 def test_hourly_demo_emits_every_exchange_calendar_slot_including_partial_bars():
     calendar = get_exchange_calendar("XNYS")
     sessions = calendar.sessions[calendar.sessions <= "2024-12-31"][-300:]
-    expected = [
-        item
-        for session in sessions
-        for item in bar_times_for_session("XNYS", session, Timeframe.H1)
-    ]
+    expected = [item for session in sessions for item in bar_times_for_session("XNYS", session, Timeframe.H1)]
     bars = generate_demo_bars(n_sessions=300, tickers=("TEST",), timeframe=Timeframe.H1)
     actual = list(bars.select("bar_open_time", "bar_close_time").iter_rows())
 
@@ -106,7 +102,9 @@ def test_demo_does_not_announce_success_when_report_creation_fails(tmp_path, mon
     monkeypatch.setattr(demo, "get_platform_config", lambda: platform)
     monkeypatch.setattr(demo, "run_experiment", lambda config: development)
     monkeypatch.setattr(demo, "evaluate_holdout", lambda *args, **kwargs: holdout)
-    monkeypatch.setattr(demo, "generate_demo_report", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("report failed")))
+    monkeypatch.setattr(
+        demo, "generate_demo_report", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("report failed"))
+    )
     config_path = tmp_path / "demo.yaml"
     config_path.write_text("data:\n  source: bundled_demo\n")
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from dagster import RunRequest, schedule
 
@@ -36,7 +37,7 @@ def _schedule_requests(context, timeframe: Timeframe) -> list[RunRequest]:
             completion_delay=timedelta(minutes=stream.completion_delay_minutes),
             now=now,
         )
-        boundary = expected["bar_close_time"].max() if not expected.is_empty() else now
+        boundary = cast(datetime, expected["bar_close_time"].max()) if not expected.is_empty() else now
         requests.append(
             RunRequest(
                 run_key=stable_run_key(stream, boundary),

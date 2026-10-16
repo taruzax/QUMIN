@@ -69,9 +69,7 @@ def frac_diff_ffd(
         if d is None:
             raise ValueError(f"No fitted FFD order is available for ticker '{ticker_name}'")
         source_col = "__ffd_source"
-        group = group.with_columns(
-            pl.col(col_name).log().alias(source_col) if log_input else pl.col(col_name).alias(source_col)
-        )
+        group = group.with_columns(pl.col(col_name).log().alias(source_col) if log_input else pl.col(col_name).alias(source_col))
         diff_col = f"{source_col}_frac_diff"
         diffed = frac_diff_polars(group, source_col, d, threshold)
         if output_col in diffed.columns:

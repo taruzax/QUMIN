@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from lab.core.contracts import WindowSet
 from lab.models.base import BaseModel
@@ -38,7 +39,7 @@ class _RecurrentNetwork(nn.Module):
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         sequence, _ = self.recurrent(X)
-        return self.head(self.output_dropout(sequence[:, -1, :]))
+        return cast(torch.Tensor, self.head(self.output_dropout(sequence[:, -1, :])))
 
 
 class _RecurrentModel(BaseModel):
@@ -85,8 +86,13 @@ class _RecurrentModel(BaseModel):
         if self.network is None:
             self.input_dim = int(input_dim)
             self.network = _RecurrentNetwork(
-                self.cell_type, input_dim, self.hidden_size, self.num_layers,
-                self.output_dropout, self.recurrent_dropout, self.task,
+                self.cell_type,
+                input_dim,
+                self.hidden_size,
+                self.num_layers,
+                self.output_dropout,
+                self.recurrent_dropout,
+                self.task,
             )
         elif self.input_dim != input_dim:
             raise ValueError(f"Expected {self.input_dim} features, received {input_dim}")
@@ -100,7 +106,7 @@ class _RecurrentModel(BaseModel):
         *,
         duration: int | None = None,
         stopping_patience: int = 5,
-    ) -> "_RecurrentModel":
+    ) -> _RecurrentModel:
         """Fit from configured initialization; repeated fits continue current weights."""
         features, targets = self.validate_inputs(X, y)
         assert targets is not None
@@ -118,15 +124,27 @@ class _RecurrentModel(BaseModel):
         else:
             prepared_stopping = None
         self.training_history, self.stopping_history, selected = train_recurrent(
-            network, features, targets, task=self.task,
-            epochs=self.epochs, batch_size=self.batch_size, learning_rate=self.learning_rate,
-            seed=self.seed, device=self.device, stopping_data=prepared_stopping,
-            duration=duration, stopping_patience=stopping_patience,
+            network,
+            features,
+            targets,
+            task=self.task,
+            epochs=self.epochs,
+            batch_size=self.batch_size,
+            learning_rate=self.learning_rate,
+            seed=self.seed,
+            device=self.device,
+            stopping_data=prepared_stopping,
+            duration=duration,
+            stopping_patience=stopping_patience,
             deterministic_policy=self.deterministic_policy,
         )
         self.selected_duration = selected
-        self.stopping_config = {"patience": int(stopping_patience), "metric": "mse" if self.task == "regression" else "cross_entropy"} if stopping_data is not None else {}
-        self.network.eval()
+        self.stopping_config = (
+            {"patience": int(stopping_patience), "metric": "mse" if self.task == "regression" else "cross_entropy"}
+            if stopping_data is not None
+            else {}
+        )
+        network.eval()
         return self
 
     def _features_loader(self, X: Any) -> DataLoader:
@@ -138,11 +156,14 @@ class _RecurrentModel(BaseModel):
         if features.shape[-1] != self.input_dim:
             raise ValueError(f"Expected {self.input_dim} features, received {features.shape[-1]}")
         if isinstance(features, WindowSet):
-            dataset = features
+            window_dataset = features
         else:
             tensor = torch.from_numpy(np.asarray(features, dtype=np.float32))
-            dataset = TensorDataset(tensor)
-        return DataLoader(dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=0)
+            tensor_dataset = TensorDataset(tensor)
+            return DataLoader(tensor_dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=0)
+        return DataLoader(
+            cast(Dataset[Any], window_dataset), batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=0
+        )
 
     def predict(self, X: Any) -> np.ndarray:
         loader = self._features_loader(X)
@@ -153,9 +174,9 @@ class _RecurrentModel(BaseModel):
             for batch in loader:
                 features = batch[0] if isinstance(batch, (tuple, list)) else batch
                 batches.append(self.network(features.to(torch.device(self.device))).cpu().numpy())
-        output = np.concatenate(batches, axis=0)
+        output = np.asarray(np.concatenate(batches, axis=0))
         if self.task == "classification":
-            return self.classes[np.argmax(output, axis=1)]
+            return cast(np.ndarray, self.classes[np.argmax(output, axis=1)])
         return output.reshape(-1).astype(np.float64)
 
     def predict_proba(self, X: Any) -> np.ndarray:
@@ -168,13 +189,11 @@ class _RecurrentModel(BaseModel):
         with torch.no_grad():
             for batch in loader:
                 features = batch[0] if isinstance(batch, (tuple, list)) else batch
-                batches.append(torch.softmax(
-                    self.network(features.to(torch.device(self.device))), dim=1
-                ).cpu().numpy())
-        return np.concatenate(batches, axis=0)
+                batches.append(torch.softmax(self.network(features.to(torch.device(self.device))), dim=1).cpu().numpy())
+        return cast(np.ndarray, np.concatenate(batches, axis=0))
 
     @classmethod
-    def load(cls, directory: str, device: str | None = None) -> "_RecurrentModel":
+    def load(cls, directory: str | Path, device: str | None = None) -> _RecurrentModel:
         model = super().load(directory)
         assert isinstance(model, cls)
         if model.network is not None:

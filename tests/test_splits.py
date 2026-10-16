@@ -24,9 +24,7 @@ def test_split_plan_uses_unique_timestamps_and_latest_holdout():
     plan = build_split_plan(_bars(), SplitsConfig(n_folds=3))
     assert len(plan.decision_timestamps) == 20
     assert plan.holdout_start == plan.decision_timestamps[16]
-    assert [fold.validation_start for fold in plan.folds] == sorted(
-        fold.validation_start for fold in plan.folds
-    )
+    assert [fold.validation_start for fold in plan.folds] == sorted(fold.validation_start for fold in plan.folds)
 
 
 def test_purge_removes_equality_boundary():

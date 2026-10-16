@@ -3,31 +3,41 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import polars as pl
+
+import lab.research.campaign as campaign
 from lab.core.config import PipelineConfig
 from lab.core.contracts import CampaignPlan, CampaignRunEntry, ExperimentVariation, MarketSnapshot
 from lab.platform.artifacts import ArtifactStore
 from lab.platform.campaign_store import CampaignStore
-import lab.research.campaign as campaign
 
 
 def _plan():
     variations = tuple(
         ExperimentVariation(
-            variation_id=f"variation-{index}", campaign="execution", snapshot_id="snapshot-1",
-            snapshot_hash="snapshot-hash", effective_config_hash=f"config-{index}",
-            feature_specification=("return_1b",), seed=index,
+            variation_id=f"variation-{index}",
+            campaign="execution",
+            snapshot_id="snapshot-1",
+            snapshot_hash="snapshot-hash",
+            effective_config_hash=f"config-{index}",
+            feature_specification=("return_1b",),
+            seed=index,
         )
         for index in (1, 2)
     )
     return CampaignPlan(
-        campaign_id="campaign-execution", campaign="execution", base_config_hash="base-hash",
-        variations=variations, max_planned_experiments=2, worker_count=2,
+        campaign_id="campaign-execution",
+        campaign="execution",
+        base_config_hash="base-hash",
+        variations=variations,
+        max_planned_experiments=2,
+        worker_count=2,
     )
 
 
 def test_campaign_records_independent_results_and_skips_completed_on_resume(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        campaign, "get_platform_config",
+        campaign,
+        "get_platform_config",
         lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
     )
     calls = []
@@ -58,9 +68,11 @@ def test_campaign_records_independent_results_and_skips_completed_on_resume(tmp_
 
     monkeypatch.setattr(campaign, "ProcessPoolExecutor", StubProcessPoolExecutor)
     plan = _plan()
+    base_config = PipelineConfig()
+    base_config.models.device = "cpu"
 
-    first = campaign.execute_campaign(PipelineConfig(), plan)
-    second = campaign.execute_campaign(PipelineConfig(), plan)
+    first = campaign.execute_campaign(base_config, plan)
+    second = campaign.execute_campaign(base_config, plan)
 
     assert [item["status"] for item in first] == ["completed", "failed"]
     assert [item["status"] for item in second] == ["failed"]
@@ -105,18 +117,25 @@ def _seed_running_campaign(tmp_path, plan):
     variation = plan.variations[0]
     created = datetime.now(timezone.utc) - timedelta(minutes=1)
     planned = CampaignRunEntry(
-        variation_id=variation.variation_id, planned_identity=plan.campaign_id,
-        effective_config_hash=variation.effective_config_hash, snapshot_hash=variation.snapshot_hash,
-        status="planned", created_at=created, updated_at=created,
+        variation_id=variation.variation_id,
+        planned_identity=plan.campaign_id,
+        effective_config_hash=variation.effective_config_hash,
+        snapshot_hash=variation.snapshot_hash,
+        status="planned",
+        created_at=created,
+        updated_at=created,
     )
     store.upsert(planned)
-    store.upsert(planned.model_copy(update={"status": "running", "previous_status": "planned", "updated_at": datetime.now(timezone.utc)}))
+    store.upsert(
+        planned.model_copy(update={"status": "running", "previous_status": "planned", "updated_at": datetime.now(timezone.utc)})
+    )
     store.close()
 
 
 def test_campaign_reconciles_completed_run_after_status_write_crash(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        campaign, "get_platform_config",
+        campaign,
+        "get_platform_config",
         lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
     )
     plan = _plan().model_copy(update={"variations": (_plan().variations[0],), "max_planned_experiments": 1, "worker_count": 1})
@@ -139,14 +158,16 @@ def test_campaign_reconciles_completed_run_after_status_write_crash(tmp_path, mo
 
 def test_campaign_marks_interrupted_variation_failed_when_no_completed_run_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        campaign, "get_platform_config",
+        campaign,
+        "get_platform_config",
         lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
     )
     plan = _plan().model_copy(update={"variations": (_plan().variations[0],), "max_planned_experiments": 1, "worker_count": 1})
     _seed_running_campaign(tmp_path, plan)
     monkeypatch.setattr(campaign, "_reconcile_completed_run", lambda *_args: None)
     monkeypatch.setattr(
-        campaign, "_execute_one",
+        campaign,
+        "_execute_one",
         lambda _config, variation, *_claim: {"variation_id": variation.variation_id, "status": "failed", "error": "interrupted"},
     )
 
@@ -163,12 +184,20 @@ def _persist_completed_root(artifacts_root, base_config, variation, run_id, *, p
     snapshot = MarketSnapshot(
         snapshot_id=variation.snapshot_id,
         snapshot_hash=variation.snapshot_hash,
-        bars=pl.DataFrame({
-            "ticker": ["AAA"],
-            "timestamp": [datetime(2024, 1, 2, tzinfo=timezone.utc)],
-            "open": [100.0], "high": [102.0], "low": [99.0], "close": [101.0], "volume": [10.0],
-        }),
-        ticker_order=("AAA",), calendar=config.data.calendar, timeframe=config.data.timeframe,
+        bars=pl.DataFrame(
+            {
+                "ticker": ["AAA"],
+                "timestamp": [datetime(2024, 1, 2, tzinfo=timezone.utc)],
+                "open": [100.0],
+                "high": [102.0],
+                "low": [99.0],
+                "close": [101.0],
+                "volume": [10.0],
+            }
+        ),
+        ticker_order=("AAA",),
+        calendar=config.data.calendar,
+        timeframe=config.data.timeframe,
     )
     artifacts = ArtifactStore(artifacts_root)
     artifacts.create_run(run_id)
@@ -181,26 +210,38 @@ def _persist_completed_root(artifacts_root, base_config, variation, run_id, *, p
     if complete:
         records.append(artifacts.write_json(run_id, "metrics.json", []))
     manifest = {
-        "config": config.model_dump(mode="json"), "config_hash": config.resolved_config_hash,
-        "snapshot_hash": variation.snapshot_hash, "split_hash": "split-hash",
+        "config": config.model_dump(mode="json"),
+        "config_hash": config.resolved_config_hash,
+        "snapshot_hash": variation.snapshot_hash,
+        "split_hash": "split-hash",
         "candidates": [{"model": "baseline", "status": "completed"}],
-        "artifacts": records, "parent_run_id": parent_run_id,
+        "artifacts": records,
+        "parent_run_id": parent_run_id,
         **(markers or {}),
     }
     if complete:
         artifacts.finalize(run_id, manifest, required_artifacts=[item["path"] for item in records])
     else:
-        artifacts.write_json(run_id, "manifest.json", {
-            **manifest, "schema_version": "run-manifest.v1", "run_id": run_id, "status": "completed",
-        })
+        artifacts.write_json(
+            run_id,
+            "manifest.json",
+            {
+                **manifest,
+                "schema_version": "run-manifest.v1",
+                "run_id": run_id,
+                "status": "completed",
+            },
+        )
 
 
 def test_reconcile_accepts_only_verified_root_development_artifacts(tmp_path):
     base_config = PipelineConfig()
     variation = _plan().variations[0]
-    variation = variation.model_copy(update={
-        "effective_config_hash": campaign._variation_config(base_config, variation).resolved_config_hash,
-    })
+    variation = variation.model_copy(
+        update={
+            "effective_config_hash": campaign._variation_config(base_config, variation).resolved_config_hash,
+        }
+    )
     _persist_completed_root(tmp_path, base_config, variation, "a-root")
     _persist_completed_root(tmp_path, base_config, variation, "b-holdout-child", parent_run_id="a-root")
     _persist_completed_root(tmp_path, base_config, variation, "c-evaluation", markers={"evaluation": "holdout"})
@@ -210,7 +251,10 @@ def test_reconcile_accepts_only_verified_root_development_artifacts(tmp_path):
     wrong_campaign = campaign._variation_config(base_config, variation).model_dump(mode="json")
     wrong_campaign["campaign"]["name"] = "another-campaign"
     _persist_completed_root(
-        tmp_path, base_config, variation, "g-wrong-campaign",
+        tmp_path,
+        base_config,
+        variation,
+        "g-wrong-campaign",
         markers={"config": wrong_campaign},
     )
     _persist_completed_root(tmp_path, base_config, variation, "h-incomplete", complete=False)
@@ -224,9 +268,11 @@ def test_reconcile_accepts_only_verified_root_development_artifacts(tmp_path):
 def test_reconcile_is_deterministic_across_matching_root_runs(tmp_path):
     base_config = PipelineConfig()
     variation = _plan().variations[0]
-    variation = variation.model_copy(update={
-        "effective_config_hash": campaign._variation_config(base_config, variation).resolved_config_hash,
-    })
+    variation = variation.model_copy(
+        update={
+            "effective_config_hash": campaign._variation_config(base_config, variation).resolved_config_hash,
+        }
+    )
     _persist_completed_root(tmp_path, base_config, variation, "z-root")
     _persist_completed_root(tmp_path, base_config, variation, "a-root")
 
@@ -236,12 +282,15 @@ def test_reconcile_is_deterministic_across_matching_root_runs(tmp_path):
 def test_execute_campaign_recovers_verified_root_without_retraining(tmp_path, monkeypatch):
     base_config = PipelineConfig()
     original = _plan().variations[0]
-    variation = original.model_copy(update={
-        "effective_config_hash": campaign._variation_config(base_config, original).resolved_config_hash,
-    })
+    variation = original.model_copy(
+        update={
+            "effective_config_hash": campaign._variation_config(base_config, original).resolved_config_hash,
+        }
+    )
     plan = _plan().model_copy(update={"variations": (variation,), "max_planned_experiments": 1, "worker_count": 1})
     monkeypatch.setattr(
-        campaign, "get_platform_config",
+        campaign,
+        "get_platform_config",
         lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
     )
     _seed_running_campaign(tmp_path, plan)
@@ -265,10 +314,17 @@ def test_worker_refuses_to_start_after_campaign_claim_is_lost(tmp_path, monkeypa
     assert store.acquire_claim(plan.campaign_id, "current-owner", lease_seconds=30)
     generation = int(store.claim(plan.campaign_id)["fencing_generation"])
     store.close()
-    monkeypatch.setattr(campaign, "run_experiment", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker must not launch")))
+    monkeypatch.setattr(
+        campaign, "run_experiment", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker must not launch"))
+    )
 
     result = campaign._execute_one(
-        PipelineConfig(), plan.variations[0], tmp_path, plan.campaign_id, "stale-owner", generation,
+        PipelineConfig(),
+        plan.variations[0],
+        tmp_path,
+        plan.campaign_id,
+        "stale-owner",
+        generation,
     )
 
     assert result["status"] == "cancelled"

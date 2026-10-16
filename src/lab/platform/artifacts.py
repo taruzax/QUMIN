@@ -112,7 +112,7 @@ class ArtifactStore:
         path = self._path(run_id, "manifest.json")
         if not path.exists():
             raise FileNotFoundError(f"Run manifest not found: {run_id}")
-        manifest = json.loads(path.read_text())
+        manifest: dict[str, Any] = json.loads(path.read_text())
         if manifest.get("status") != "completed":
             raise ValueError(f"Run is not complete: {run_id}")
         return manifest

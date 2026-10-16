@@ -77,25 +77,19 @@ def build_split_plan(snapshot: MarketSnapshot | pl.DataFrame, splits_config: Spl
     if explicit and "holdout_start" not in explicit:
         raise ValueError("Explicit split boundaries require holdout_start")
     holdout_start_index = (
-        _explicit_index(timestamps, explicit["holdout_start"], name="holdout_start")
-        if explicit
-        else n_timestamps - holdout_count
+        _explicit_index(timestamps, explicit["holdout_start"], name="holdout_start") if explicit else n_timestamps - holdout_count
     )
     development_start_index = (
-        _explicit_index(timestamps, explicit.get("development_start", timestamps[0]), name="development_start")
-        if explicit
-        else 0
+        _explicit_index(timestamps, explicit.get("development_start", timestamps[0]), name="development_start") if explicit else 0
     )
-    holdout_end = (
-        _as_utc(explicit["holdout_end"])
-        if "holdout_end" in explicit
-        else _boundary_end(timestamps, n_timestamps)
-    )
+    holdout_end = _as_utc(explicit["holdout_end"]) if "holdout_end" in explicit else _boundary_end(timestamps, n_timestamps)
     if not 0 <= development_start_index < holdout_start_index < n_timestamps:
         raise ValueError("Explicit boundaries must leave non-empty development and holdout periods")
 
     development_times = timestamps[development_start_index:holdout_start_index]
-    holdout_times = tuple(timestamp for timestamp in timestamps if timestamp >= timestamps[holdout_start_index] and timestamp < holdout_end)
+    holdout_times = tuple(
+        timestamp for timestamp in timestamps if timestamp >= timestamps[holdout_start_index] and timestamp < holdout_end
+    )
     if not development_times or not holdout_times:
         raise ValueError("Split boundaries must produce non-empty development and holdout timestamps")
 
@@ -144,9 +138,5 @@ def period_timestamps(plan: SplitPlan, name: str) -> tuple[datetime, ...]:
     if name == "development":
         return tuple(timestamp for timestamp in plan.decision_timestamps if timestamp < plan.holdout_start)
     if name == "holdout":
-        return tuple(
-            timestamp
-            for timestamp in plan.decision_timestamps
-            if plan.holdout_start <= timestamp < plan.holdout_end
-        )
+        return tuple(timestamp for timestamp in plan.decision_timestamps if plan.holdout_start <= timestamp < plan.holdout_end)
     raise ValueError(f"Unknown execution period: {name}")

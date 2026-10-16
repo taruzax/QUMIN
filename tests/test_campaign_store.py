@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -13,9 +13,16 @@ from lab.platform.campaign_store import CampaignStore
 def _entry(status, *, created_at=None, previous=None, run_id=None, error=None):
     now = datetime.now(timezone.utc)
     return CampaignRunEntry(
-        variation_id="variation-1", planned_identity="campaign-1", effective_config_hash="config-hash",
-        snapshot_hash="snapshot-hash", status=status, created_at=created_at or now, updated_at=now,
-        previous_status=previous, run_id=run_id, error=error,
+        variation_id="variation-1",
+        planned_identity="campaign-1",
+        effective_config_hash="config-hash",
+        snapshot_hash="snapshot-hash",
+        status=status,
+        created_at=created_at or now,
+        updated_at=now,
+        previous_status=previous,
+        run_id=run_id,
+        error=error,
     )
 
 
@@ -29,13 +36,21 @@ def test_campaign_status_transitions_and_completed_immutability(tmp_path):
 
     assert store.entries("campaign-1")[0].run_id == "run-1"
     variation = ExperimentVariation(
-        variation_id="variation-1", campaign="campaign", snapshot_id="snapshot-1",
-        snapshot_hash="snapshot-hash", effective_config_hash="config-hash",
-        feature_specification=("close",), seed=1,
+        variation_id="variation-1",
+        campaign="campaign",
+        snapshot_id="snapshot-1",
+        snapshot_hash="snapshot-hash",
+        effective_config_hash="config-hash",
+        feature_specification=("close",),
+        seed=1,
     )
     plan = CampaignPlan(
-        campaign_id="campaign-1", campaign="campaign", base_config_hash="base-hash",
-        variations=(variation,), max_planned_experiments=1, worker_count=1,
+        campaign_id="campaign-1",
+        campaign="campaign",
+        base_config_hash="base-hash",
+        variations=(variation,),
+        max_planned_experiments=1,
+        worker_count=1,
     )
     result_ref = store.finalize(plan)
     assert result_ref is not None
@@ -52,13 +67,21 @@ def test_failed_campaign_result_is_preserved_when_retry_completes(tmp_path):
     store.upsert(_entry("running", created_at=planned.created_at, previous="planned"))
     store.upsert(_entry("failed", created_at=planned.created_at, previous="running", error="transient"))
     variation = ExperimentVariation(
-        variation_id="variation-1", campaign="campaign", snapshot_id="snapshot-1",
-        snapshot_hash="snapshot-hash", effective_config_hash="config-hash",
-        feature_specification=("close",), seed=1,
+        variation_id="variation-1",
+        campaign="campaign",
+        snapshot_id="snapshot-1",
+        snapshot_hash="snapshot-hash",
+        effective_config_hash="config-hash",
+        feature_specification=("close",),
+        seed=1,
     )
     plan = CampaignPlan(
-        campaign_id="campaign-1", campaign="campaign", base_config_hash="base-hash",
-        variations=(variation,), max_planned_experiments=1, worker_count=1,
+        campaign_id="campaign-1",
+        campaign="campaign",
+        base_config_hash="base-hash",
+        variations=(variation,),
+        max_planned_experiments=1,
+        worker_count=1,
     )
 
     failed_ref = store.finalize(plan)
@@ -97,13 +120,21 @@ def test_campaign_result_sidecar_recovers_after_index_commit_crash(tmp_path, mon
     store.upsert(_entry("running", created_at=planned.created_at, previous="planned"))
     store.upsert(_entry("completed", created_at=planned.created_at, previous="running", run_id="run-1"))
     variation = ExperimentVariation(
-        variation_id="variation-1", campaign="campaign", snapshot_id="snapshot-1",
-        snapshot_hash="snapshot-hash", effective_config_hash="config-hash",
-        feature_specification=("close",), seed=1,
+        variation_id="variation-1",
+        campaign="campaign",
+        snapshot_id="snapshot-1",
+        snapshot_hash="snapshot-hash",
+        effective_config_hash="config-hash",
+        feature_specification=("close",),
+        seed=1,
     )
     plan = CampaignPlan(
-        campaign_id="campaign-1", campaign="campaign", base_config_hash="base-hash",
-        variations=(variation,), max_planned_experiments=1, worker_count=1,
+        campaign_id="campaign-1",
+        campaign="campaign",
+        base_config_hash="base-hash",
+        variations=(variation,),
+        max_planned_experiments=1,
+        worker_count=1,
     )
     write_create_only = store._write_create_only
     failed_once = False
@@ -134,13 +165,21 @@ def test_two_finalizers_publish_one_immutable_state_record(tmp_path):
     seed.upsert(_entry("running", created_at=planned.created_at, previous="planned"))
     seed.upsert(_entry("completed", created_at=planned.created_at, previous="running", run_id="run-1"))
     variation = ExperimentVariation(
-        variation_id="variation-1", campaign="campaign", snapshot_id="snapshot-1",
-        snapshot_hash="snapshot-hash", effective_config_hash="config-hash",
-        feature_specification=("close",), seed=1,
+        variation_id="variation-1",
+        campaign="campaign",
+        snapshot_id="snapshot-1",
+        snapshot_hash="snapshot-hash",
+        effective_config_hash="config-hash",
+        feature_specification=("close",),
+        seed=1,
     )
     plan = CampaignPlan(
-        campaign_id="campaign-1", campaign="campaign", base_config_hash="base-hash",
-        variations=(variation,), max_planned_experiments=1, worker_count=1,
+        campaign_id="campaign-1",
+        campaign="campaign",
+        base_config_hash="base-hash",
+        variations=(variation,),
+        max_planned_experiments=1,
+        worker_count=1,
     )
     seed.close()
 
@@ -169,22 +208,36 @@ def test_campaign_mutations_require_current_fencing_generation(tmp_path):
     store.upsert(planned, owner_id="owner-1", fencing_generation=first_generation)
 
     assert store.acquire_claim(
-        "campaign-1", "owner-2", lease_seconds=30, now=now + timedelta(seconds=1),
+        "campaign-1",
+        "owner-2",
+        lease_seconds=30,
+        now=now + timedelta(seconds=1),
     )
     second_generation = int(store.claim("campaign-1")["fencing_generation"])
     assert second_generation > first_generation
     with pytest.raises(RuntimeError, match="ownership lost"):
         store.upsert(
             _entry("running", created_at=planned.created_at, previous="planned"),
-            owner_id="owner-1", fencing_generation=first_generation,
+            owner_id="owner-1",
+            fencing_generation=first_generation,
         )
     plan = CampaignPlan(
-        campaign_id="campaign-1", campaign="campaign", base_config_hash="base-hash",
-        variations=(ExperimentVariation(
-            variation_id="variation-1", campaign="campaign", snapshot_id="snapshot-1",
-            snapshot_hash="snapshot-hash", effective_config_hash="config-hash",
-            feature_specification=("close",), seed=1,
-        ),), max_planned_experiments=1, worker_count=1,
+        campaign_id="campaign-1",
+        campaign="campaign",
+        base_config_hash="base-hash",
+        variations=(
+            ExperimentVariation(
+                variation_id="variation-1",
+                campaign="campaign",
+                snapshot_id="snapshot-1",
+                snapshot_hash="snapshot-hash",
+                effective_config_hash="config-hash",
+                feature_specification=("close",),
+                seed=1,
+            ),
+        ),
+        max_planned_experiments=1,
+        worker_count=1,
     )
     with pytest.raises(RuntimeError, match="ownership lost"):
         store.finalize(plan, owner_id="owner-1", fencing_generation=first_generation)
@@ -205,7 +258,8 @@ def test_campaign_claim_table_migrates_existing_owner_rows(tmp_path):
     database.parent.mkdir(parents=True)
     connection = sqlite3.connect(database)
     connection.execute(
-        "CREATE TABLE campaign_claims (campaign_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        "CREATE TABLE campaign_claims (campaign_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, "
+        "expires_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
     )
     connection.execute(
         "INSERT INTO campaign_claims VALUES (?, ?, ?, ?)",

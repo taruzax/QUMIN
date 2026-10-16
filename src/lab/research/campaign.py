@@ -19,12 +19,11 @@ from threadpoolctl import threadpool_limits
 
 from lab.core.config import CampaignMatrixConfig, PipelineConfig, Timeframe, get_platform_config
 from lab.core.contracts import CampaignPlan, CampaignRunEntry, ExperimentVariation
+from lab.core.schemas import CAUSAL_BASE_FEATURES, lagged_col, return_col, validate_feature_names
 from lab.platform.artifacts import ArtifactStore
 from lab.platform.campaign_store import CampaignStore
 from lab.platform.market_store import SnapshotCatalog
-from lab.core.schemas import CAUSAL_BASE_FEATURES, lagged_col, return_col, validate_feature_names
 from lab.research.experiment import index_deferred_run, load_run, run_experiment
-
 
 _MODEL_PARAMS = {
     "baseline": set(),
@@ -60,21 +59,20 @@ def plan_campaign(base_config: PipelineConfig, matrix: CampaignMatrixConfig) -> 
     catalog = SnapshotCatalog(get_platform_config().paths.snapshot_dir, read_only=True)
     snapshots = {snapshot_id: catalog.load(snapshot_id) for snapshot_id in sorted(set(snapshot_ids))}
     incompatible = [
-        snapshot_id for snapshot_id, snapshot in snapshots.items()
+        snapshot_id
+        for snapshot_id, snapshot in snapshots.items()
         if snapshot.calendar != base_config.data.calendar or snapshot.timeframe != base_config.data.timeframe
     ]
     if incompatible:
         raise ValueError(
-            "Campaign snapshots must match the base pipeline calendar and timeframe; "
-            f"incompatible snapshot IDs: {incompatible}"
+            f"Campaign snapshots must match the base pipeline calendar and timeframe; incompatible snapshot IDs: {incompatible}"
         )
-    available_features = tuple(
-        name for name in CAUSAL_BASE_FEATURES
-        if name not in {"hour_sin", "hour_cos"} or base_config.timeframe == Timeframe.H1
-    ) + tuple(return_col(lag) for lag in base_config.return_lags) + tuple(
-        lagged_col(lag, lookback)
-        for lookback in base_config.lookback_periods
-        for lag in base_config.return_lags
+    available_features = (
+        tuple(
+            name for name in CAUSAL_BASE_FEATURES if name not in {"hour_sin", "hour_cos"} or base_config.timeframe == Timeframe.H1
+        )
+        + tuple(return_col(lag) for lag in base_config.return_lags)
+        + tuple(lagged_col(lag, lookback) for lookback in base_config.lookback_periods for lag in base_config.return_lags)
     )
     if matrix.feature_column_sets:
         feature_sets = matrix.feature_column_sets
@@ -219,7 +217,9 @@ def execute_campaign(
                 )
                 _require_campaign_claim(store, plan.campaign_id, owner_id, fencing_generation, lease_lost)
                 store.upsert(completed, **mutation_owner)
-                reconciled.append({"variation_id": variation.variation_id, "status": "completed", "run_id": completed_run, "reconciled": True})
+                reconciled.append(
+                    {"variation_id": variation.variation_id, "status": "completed", "run_id": completed_run, "reconciled": True}
+                )
             else:
                 ready.append(variation)
         workers = min(plan.worker_count, len(ready)) if ready else 0
@@ -229,9 +229,16 @@ def execute_campaign(
         if workers <= 1:
             for variation in ready:
                 _require_campaign_claim(store, plan.campaign_id, owner_id, fencing_generation, lease_lost)
-                results.append(_execute_one(
-                    base_config, variation, artifacts_root, plan.campaign_id, owner_id, fencing_generation,
-                ))
+                results.append(
+                    _execute_one(
+                        base_config,
+                        variation,
+                        artifacts_root,
+                        plan.campaign_id,
+                        owner_id,
+                        fencing_generation,
+                    )
+                )
         elif ready:
             with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as executor:
                 pending = iter(ready)
@@ -246,8 +253,13 @@ def execute_campaign(
                         return False
                     _require_campaign_claim(store, plan.campaign_id, owner_id, fencing_generation, lease_lost)
                     future = executor.submit(
-                        _execute_one, base_config, variation, artifacts_root, plan.campaign_id,
-                        owner_id, fencing_generation,
+                        _execute_one,
+                        base_config,
+                        variation,
+                        artifacts_root,
+                        plan.campaign_id,
+                        owner_id,
+                        fencing_generation,
                     )
                     futures[future] = variation
                     return True
@@ -279,22 +291,32 @@ def execute_campaign(
             if not result.get("reconciled"):
                 status = result["status"]
                 _require_campaign_claim(store, plan.campaign_id, owner_id, fencing_generation, lease_lost)
-                store.upsert(CampaignRunEntry(
-                    variation_id=variation.variation_id,
-                    planned_identity=plan.campaign_id,
-                    effective_config_hash=variation.effective_config_hash,
-                    snapshot_hash=variation.snapshot_hash,
-                    status=status,
-                    created_at=existing.get(variation.variation_id, CampaignRunEntry(
-                        variation_id=variation.variation_id, planned_identity=plan.campaign_id,
-                        effective_config_hash=variation.effective_config_hash, snapshot_hash=variation.snapshot_hash,
-                        status="planned", created_at=now, updated_at=now,
-                    )).created_at,
-                    updated_at=datetime.now(timezone.utc),
-                    run_id=result.get("run_id"),
-                    error=result.get("error"),
-                    previous_status="running",
-                ), **mutation_owner)
+                store.upsert(
+                    CampaignRunEntry(
+                        variation_id=variation.variation_id,
+                        planned_identity=plan.campaign_id,
+                        effective_config_hash=variation.effective_config_hash,
+                        snapshot_hash=variation.snapshot_hash,
+                        status=status,
+                        created_at=existing.get(
+                            variation.variation_id,
+                            CampaignRunEntry(
+                                variation_id=variation.variation_id,
+                                planned_identity=plan.campaign_id,
+                                effective_config_hash=variation.effective_config_hash,
+                                snapshot_hash=variation.snapshot_hash,
+                                status="planned",
+                                created_at=now,
+                                updated_at=now,
+                            ),
+                        ).created_at,
+                        updated_at=datetime.now(timezone.utc),
+                        run_id=result.get("run_id"),
+                        error=result.get("error"),
+                        previous_status="running",
+                    ),
+                    **mutation_owner,
+                )
             if result["status"] == "completed":
                 try:
                     _require_campaign_claim(store, plan.campaign_id, owner_id, fencing_generation, lease_lost)
@@ -326,7 +348,9 @@ def _renew_campaign_claim(
         try:
             store = CampaignStore(artifacts_root)
             if not store.renew_claim(
-                campaign_id, owner_id, lease_seconds=lease_seconds,
+                campaign_id,
+                owner_id,
+                lease_seconds=lease_seconds,
                 fencing_generation=fencing_generation,
             ):
                 lease_lost.set()
@@ -340,7 +364,10 @@ def _renew_campaign_claim(
 
 
 def _require_campaign_claim(
-    store: CampaignStore, campaign_id: str, owner_id: str, fencing_generation: int,
+    store: CampaignStore,
+    campaign_id: str,
+    owner_id: str,
+    fencing_generation: int,
     lease_lost: threading.Event,
 ) -> None:
     if lease_lost.is_set() or not store.assert_claim(campaign_id, owner_id, fencing_generation):
@@ -382,15 +409,17 @@ def _reconcile_completed_run(
         ):
             continue
         if any(
-            any(candidate.get(marker) not in (None, False, "development") for marker in ("evaluation", "evaluation_type", "holdout"))
-            for candidate in manifest.get("candidates", []) if isinstance(candidate, dict)
+            any(
+                candidate.get(marker) not in (None, False, "development")
+                for marker in ("evaluation", "evaluation_type", "holdout")
+            )
+            for candidate in manifest.get("candidates", [])
+            if isinstance(candidate, dict)
         ):
             continue
         candidates = manifest.get("candidates", [])
         if not any(
-            isinstance(candidate, dict)
-            and candidate.get("status") == "completed"
-            and candidate.get("model")
+            isinstance(candidate, dict) and candidate.get("status") == "completed" and candidate.get("model")
             for candidate in candidates
         ):
             continue
@@ -399,15 +428,22 @@ def _reconcile_completed_run(
 
 
 def _execute_one(
-    base_config: PipelineConfig, variation: ExperimentVariation,
-    artifacts_root: str | os.PathLike[str] | None = None, campaign_id: str | None = None,
-    owner_id: str | None = None, fencing_generation: int | None = None,
+    base_config: PipelineConfig,
+    variation: ExperimentVariation,
+    artifacts_root: str | os.PathLike[str] | None = None,
+    campaign_id: str | None = None,
+    owner_id: str | None = None,
+    fencing_generation: int | None = None,
 ) -> dict[str, Any]:
     if artifacts_root is not None and campaign_id is not None and owner_id is not None and fencing_generation is not None:
         store = CampaignStore(artifacts_root)
         try:
             if not store.assert_claim(campaign_id, owner_id, fencing_generation):
-                return {"variation_id": variation.variation_id, "status": "cancelled", "error": "campaign claim lost before worker start"}
+                return {
+                    "variation_id": variation.variation_id,
+                    "status": "cancelled",
+                    "error": "campaign claim lost before worker start",
+                }
         finally:
             store.close()
     for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
@@ -422,6 +458,18 @@ def _execute_one(
     try:
         with threadpool_limits(limits=1):
             result = run_experiment(_variation_config(base_config, variation), tracking_mode="deferred")
-        return {"variation_id": variation.variation_id, "status": "completed", "run_id": result.ref.run_id, "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat()}
+        return {
+            "variation_id": variation.variation_id,
+            "status": "completed",
+            "run_id": result.ref.run_id,
+            "started_at": started,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception:
-        return {"variation_id": variation.variation_id, "status": "failed", "error": traceback.format_exc()[-4000:], "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat()}
+        return {
+            "variation_id": variation.variation_id,
+            "status": "failed",
+            "error": traceback.format_exc()[-4000:],
+            "started_at": started,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }

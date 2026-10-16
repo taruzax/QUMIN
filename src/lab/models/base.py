@@ -1,11 +1,12 @@
-from abc import ABC, abstractmethod
 import hashlib
 import json
 import pickle
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
 from lab.core.contracts import WindowSet
 
 
@@ -59,8 +60,15 @@ class BaseModel(ABC):
         architecture = {
             key: getattr(self, key)
             for key in (
-                "cell_type", "hidden_size", "num_layers", "input_dim", "output_dropout",
-                "recurrent_dropout", "n_estimators", "max_depth", "learning_rate",
+                "cell_type",
+                "hidden_size",
+                "num_layers",
+                "input_dim",
+                "output_dropout",
+                "recurrent_dropout",
+                "n_estimators",
+                "max_depth",
+                "learning_rate",
             )
             if hasattr(self, key)
         }

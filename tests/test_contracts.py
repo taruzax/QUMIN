@@ -33,8 +33,11 @@ def test_sample_set_metadata_must_align_without_materializing_windows():
     windows = WindowSet([np.ones((4, 1))], np.asarray([0, 0]), np.asarray([0, 1]), 3)
     with pytest.raises(ValueError, match="metadata"):
         SampleSet(
-            X=windows, keys=_keys(2), window_start=(_keys(2)[0].timestamp,),
-            window_end=tuple(key.timestamp for key in _keys(2)), feature_order=("close",),
+            X=windows,
+            keys=_keys(2),
+            window_start=(_keys(2)[0].timestamp,),
+            window_end=tuple(key.timestamp for key in _keys(2)),
+            feature_order=("close",),
         )
 
 
@@ -59,10 +62,13 @@ def test_fold_bundle_keeps_scoring_targets_keyed_and_separate_from_evaluation_wi
     )
 
     bundle = FoldBundle(
-        fold_ref="0", train_samples=samples, evaluation_samples=samples,
+        fold_ref="0",
+        train_samples=samples,
+        evaluation_samples=samples,
         scoring_keys=(keys[1],),
         scoring_targets=ScoringTargets(keys=(keys[1],), values=np.asarray([0.25])),
-        preprocessor=None, boundaries={},
+        preprocessor=None,
+        boundaries={},
     )
 
     assert bundle.evaluation_samples.y is None
@@ -71,10 +77,13 @@ def test_fold_bundle_keeps_scoring_targets_keyed_and_separate_from_evaluation_wi
 
     with pytest.raises(ValueError, match="belong to evaluation keys"):
         FoldBundle(
-            fold_ref="0", train_samples=samples, evaluation_samples=samples,
+            fold_ref="0",
+            train_samples=samples,
+            evaluation_samples=samples,
             scoring_keys=(_keys(3)[2],),
             scoring_targets=ScoringTargets(keys=(_keys(3)[2],), values=np.asarray([0.25])),
-            preprocessor=None, boundaries={},
+            preprocessor=None,
+            boundaries={},
         )
 
 

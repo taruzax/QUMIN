@@ -26,8 +26,11 @@ def test_relocated_platform_and_research_modules_preserve_legacy_exports():
     samples = import_module("lab.research.samples")
     assert loader.load_market_data is data_access.load_market_data
     for removed_name in (
-        "TimeSeriesDataset", "InferenceTimeSeriesDataset", "create_dataloaders",
-        "collate_batch", "collate_fn",
+        "TimeSeriesDataset",
+        "InferenceTimeSeriesDataset",
+        "create_dataloaders",
+        "collate_batch",
+        "collate_fn",
     ):
         assert not hasattr(samples, removed_name)
     with pytest.raises(ModuleNotFoundError):

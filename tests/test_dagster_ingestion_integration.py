@@ -39,15 +39,17 @@ class _CalendarFixtureProvider:
             else:
                 timestamp = item["bar_open_time"].astimezone(ZoneInfo(self.stream.provider_timezone)).replace(tzinfo=None)
             for ticker in tickers:
-                rows.append({
-                    "ticker": ticker,
-                    "timestamp": timestamp,
-                    "open": 100.0,
-                    "high": 102.0,
-                    "low": 99.0,
-                    "close": 101.0,
-                    "volume": 500.0,
-                })
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "timestamp": timestamp,
+                        "open": 100.0,
+                        "high": 102.0,
+                        "low": 99.0,
+                        "close": 101.0,
+                        "volume": 500.0,
+                    }
+                )
         return pl.DataFrame(rows)
 
 

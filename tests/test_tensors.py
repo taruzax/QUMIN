@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta, timezone
 import warnings
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import polars as pl
@@ -15,10 +15,7 @@ def _frame(rows: int = 12, tickers: int = 2) -> pl.DataFrame:
         frames.append(
             pl.DataFrame(
                 {
-                    "timestamp": [
-                        datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index)
-                        for index in range(rows)
-                    ],
+                    "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index) for index in range(rows)],
                     "ticker": [f"T{ticker_index}"] * rows,
                     "f1": np.arange(rows, dtype=np.float64),
                     "f2": np.arange(rows, dtype=np.float64) * 2,
@@ -53,7 +50,8 @@ def test_window_set_materializes_only_when_explicitly_requested():
     materialized = lazy.to_numpy()
     assert materialized.flags.writeable
     np.testing.assert_array_equal(
-        materialized[:, :, 0], np.asarray([[0, 1, 2], [1, 2, 3], [2, 3, 4]], dtype=np.float32),
+        materialized[:, :, 0],
+        np.asarray([[0, 1, 2], [1, 2, 3], [2, 3, 4]], dtype=np.float32),
     )
 
 

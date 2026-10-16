@@ -1,5 +1,5 @@
-from datetime import date
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from threading import Barrier
 
 import polars as pl
@@ -13,18 +13,37 @@ from lab.quant.timing import bar_times_for_session
 
 def _snapshot():
     opened, closed, session_id = bar_times_for_session("XNYS", "2024-01-02", Timeframe.D1)[0]
-    bars = pl.DataFrame({
-        "ticker": ["AAA"], "raw_bar_index": [0], "bar_open_time": [opened],
-        "bar_close_time": [closed], "timestamp": [closed], "open": [100.0],
-        "high": [102.0], "low": [99.0], "close": [101.0], "volume": [500.0],
-        "session_id": [session_id],
-    })
+    bars = pl.DataFrame(
+        {
+            "ticker": ["AAA"],
+            "raw_bar_index": [0],
+            "bar_open_time": [opened],
+            "bar_close_time": [closed],
+            "timestamp": [closed],
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "volume": [500.0],
+            "session_id": [session_id],
+        }
+    )
     return build_market_snapshot([bars], calendar="XNYS", timeframe=Timeframe.D1, provenance={"source": "test"})
 
 
 def test_provider_batch_is_idempotent_and_checksum_verified(tmp_path):
     store = ProviderBatchStore(tmp_path / "batches")
-    frame = pl.DataFrame({"ticker": ["AAA"], "timestamp": [date(2024, 1, 2)], "open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [10.0]})
+    frame = pl.DataFrame(
+        {
+            "ticker": ["AAA"],
+            "timestamp": [date(2024, 1, 2)],
+            "open": [1.0],
+            "high": [2.0],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [10.0],
+        }
+    )
     first = store.store(frame, provider="test", stream_id="daily", request={"start": "2024-01-02"})
     repeated = store.store(frame, provider="test", stream_id="daily", request={"start": "2024-01-02"})
 
