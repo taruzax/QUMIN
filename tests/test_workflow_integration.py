@@ -48,9 +48,7 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
 
     output = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines() if "=" in line)
     development_id = output["development_run_id"]
-    holdout_id = output["holdout_run_id"]
     development = load_run(development_id, artifacts_dir=artifacts)
-    holdout = load_run(holdout_id, artifacts_dir=artifacts)
     baseline = next(item for item in development.artifact_manifest["candidates"] if item.get("model") == "baseline")
     candidate_predictions = load_candidate_predictions(development_id, "baseline", artifacts_dir=artifacts)
     saved_variant = evaluate_saved_predictions(
@@ -107,16 +105,19 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
     )
     assert sum(len(frame.keys) for frame in candidate_predictions) == development.artifact_manifest["predicted_coverage"]["total"]
     assert development.snapshot is not None
-    assert holdout.ref.parent_run_id == development_id
-    holdout_selection = next(
-        item["selected_model"] for item in holdout.artifact_manifest["candidates"] if item.get("selected_model")
-    )
-    assert holdout_selection == output["selected_model"]
+    assert "holdout_run_id" not in output
+    assert "holdout_verdict" not in output
     assert saved_variant.ref.parent_run_id == development_id
     assert report.is_file() and report.stat().st_size > 0
     assert locator_path.is_file()
     assert locator["development"]["run_id"] == development_id
-    assert locator["holdout"]["run_id"] == holdout_id
+    assert locator["holdout"] is None
+    assert not list((artifacts / "runs").glob(f"{development_id}-holdout-*"))
+    ledger = TrialLedger(artifacts / "trials.sqlite")
+    try:
+        assert ledger.seal(development.ref.snapshot_hash) is None
+    finally:
+        ledger.connection.close()
     assert output["selected_model"] in {
         item["model"] for item in development.artifact_manifest["candidates"] if item.get("status") == "completed"
     }

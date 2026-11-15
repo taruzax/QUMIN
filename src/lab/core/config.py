@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import warnings
 from copy import deepcopy
 from datetime import timedelta
@@ -294,7 +295,7 @@ class PlatformPathsConfig(StrictModel):
 
 class MLflowConfig(StrictModel):
     enabled: bool = True
-    experiment_name: str = "quant-ml-lab"
+    experiment_name: str = "qumin"
 
 
 class PlatformConfig(StrictModel):
@@ -701,4 +702,5 @@ def get_config() -> PipelineConfig:
 
 @lru_cache
 def get_platform_config() -> PlatformConfig:
-    return PlatformConfig.from_yaml()
+    path = Path(os.environ.get("QUANT_ML_PLATFORM_CONFIG", PLATFORM_CONFIG_PATH))
+    return PlatformConfig.from_yaml(path)

@@ -153,7 +153,10 @@ def purge_training_labels(labels: pl.DataFrame, evaluation_start) -> pl.DataFram
         raise ValueError("Unresolved labels with null t1 cannot enter a supervised split")
     if "decision_time" not in labels.columns:
         raise ValueError("Label frame must contain decision_time for purging")
-    return labels.filter(pl.col("t1") < evaluation_start)
+    boundary = pl.col("t1") < evaluation_start
+    if "event_end" in labels.columns:
+        boundary = boundary & (pl.col("event_end") < evaluation_start)
+    return labels.filter(boundary)
 
 
 def scoreable_labels(labels: pl.DataFrame, evaluation_start, evaluation_end) -> tuple[pl.DataFrame, dict[str, int]]:
@@ -162,12 +165,15 @@ def scoreable_labels(labels: pl.DataFrame, evaluation_start, evaluation_end) -> 
         raise ValueError("Label frame must contain t1 for scoring")
     unresolved = int(labels["t1"].null_count())
     resolved = labels.filter(pl.col("t1").is_not_null())
-    scoreable = resolved.filter(
+    within_period = (
         (pl.col("decision_time") >= evaluation_start)
         & (pl.col("decision_time") < evaluation_end)
         & (pl.col("t1") >= evaluation_start)
         & (pl.col("t1") < evaluation_end)
     )
+    if "event_end" in labels.columns:
+        within_period = within_period & (pl.col("event_end") < evaluation_end)
+    scoreable = resolved.filter(within_period)
     return scoreable, {
         "input_rows": labels.height,
         "unresolved_rows": unresolved,
@@ -198,4 +204,4 @@ def purge_by_information_interval(
 def fold_training_labels(labels: pl.DataFrame, fold: FoldSpec) -> pl.DataFrame:
     """Select chronological training labels and apply equality-safe purging."""
     candidates = labels.filter((pl.col("decision_time") >= fold.train_start) & (pl.col("decision_time") < fold.train_end))
-    return purge_training_labels(candidates, fold.validation_start)
+    return purge_training_labels(candidates, min(fold.train_end, fold.validation_start))

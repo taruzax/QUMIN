@@ -1,7 +1,7 @@
 [project]
-name = "quant-ml-lab"
+name = "qumin"
 version = "0.1.0"
-description = "Add your description here"
+description = "Quantitative research tools implementing methods from Advances in Financial Machine Learning"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -44,6 +44,8 @@ dependencies = [
     "vectorbt>=0.28.5,<1.1",
     "xgboost<3",
     "yfinance>=1.2.0",
+    "mcp[cli]>=2.3.0",
+    "fastmcp>=4.1.8",
 ]
 
 [project.optional-dependencies]
@@ -77,8 +79,8 @@ module_name = "lab.platform.dagster"
 
 [project.scripts]
 run-pipeline = "lab.pipelines.data_pipeline:main"
-quant-ml-demo = "lab.demo:main"
-quant-ml = "lab.cli:main"
+qumin-demo = "lab.demo:main"
+qumin = "lab.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

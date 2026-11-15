@@ -211,6 +211,48 @@ def test_generic_report_includes_identity_costs_evidence_and_escapes_metadata(tm
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in content
 
 
+def test_rejected_report_renders_frozen_decision_and_comparable_sharpes(tmp_path, monkeypatch):
+    monkeypatch.setattr(reporting, "qs", None)
+    decision = {
+        "decision_id": "decision-rejected",
+        "verdict": "REJECTED_BY_DSR",
+        "evidence": {
+            "trial_count": 3,
+            "comparable_count": 2,
+            "score": 0.72,
+            "threshold": 0.95,
+            "evidence_digest": "digest-frozen",
+            "comparable_sharpes": [{"attempt_id": "first", "sharpe": 0.1}, {"attempt_id": "second", "sharpe": -0.2}],
+        },
+    }
+    path = generate_run_report(
+        tmp_path / "rejected.html",
+        result=_fake_run("development", all_cash=False),
+        config=PipelineConfig(),
+        gate_decision=decision,
+    )
+    body = path.read_text()
+    assert all(
+        value in body
+        for value in ("decision-rejected", "REJECTED_BY_DSR", "digest-frozen", "Comparable candidate Sharpes", "first", "second")
+    )
+    manifest = tmp_path / "runs" / "development" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"run_id":"development"}')
+    store = ReportStore(tmp_path / "artifacts")
+    locator = store.write_locator(
+        report_path=path,
+        run_id="development",
+        manifest_path=manifest,
+        report_type="development",
+        decision_id=decision["decision_id"],
+    )
+
+    verified = store.load_locator(locator["report_id"])
+    assert verified["decision_id"] == "decision-rejected"
+    assert verified["report_checksum"] == sha256_file(path)
+
+
 def test_period_summary_recomputes_requested_returns_with_snapshot_calendar(monkeypatch):
     result = _fake_run("unit-check", all_cash=False)
     hourly_timestamps = [

@@ -24,6 +24,7 @@ from lab.platform.artifacts import ArtifactStore
 from lab.platform.campaign_store import CampaignStore
 from lab.platform.market_store import SnapshotCatalog
 from lab.research.experiment import index_deferred_run, load_run, run_experiment
+from lab.research.trial_ledger import TrialLedger
 
 _MODEL_PARAMS = {
     "baseline": set(),
@@ -148,6 +149,8 @@ def execute_campaign(
 ) -> list[dict[str, Any]]:
     """Resume eligible variations under an expiring campaign-wide claim."""
     artifacts_root = get_platform_config().paths.artifacts_dir
+    ledger = TrialLedger(artifacts_root / "trials.sqlite")
+    ledger.close()
     store = CampaignStore(artifacts_root)
     owner_id = f"campaign-owner-{uuid.uuid4().hex}"
     if not store.acquire_claim(plan.campaign_id, owner_id, lease_seconds=lease_seconds):

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +46,7 @@ from lab.quant.metrics import (
     statistical_returns,
     unavailable_metric,
 )
+from lab.research.holdout_gate import HoldoutRejected, evaluate_gate
 from lab.research.portfolio import build_allocations
 from lab.research.preprocessing import prepare_dataset, prepare_fold
 from lab.research.training import train_candidate
@@ -215,15 +218,24 @@ def _strategy_result(
     period_name: str,
 ) -> tuple[tuple[AllocationFrame, ...], BacktestResult]:
     rows = _combined_predictions(predictions)
+    period = next(item for item in dataset.split_plan.execution_periods if item.name == period_name)
+    # Build allocations only from bars inside the scored execution interval.
+    # Keep pre-period history available for causal allocation warm-up.
+    if period_name == "development":
+        allowed_bars = dataset.snapshot.bars.filter(pl.col("timestamp") < dataset.split_plan.holdout_start)
+    else:
+        allowed_bars = dataset.snapshot.bars.filter(pl.col("timestamp") < dataset.split_plan.holdout_end)
+    allocation_snapshot = dataset.snapshot.model_copy(update={"bars": allowed_bars})
     allocations = build_allocations(
-        dataset.snapshot,
+        allocation_snapshot,
         rows,
         config.allocation,
         task=config.task.kind,
         backtest_config=config.backtest,
         config_hash=config.resolved_config_hash,
     )
-    period = next(item for item in dataset.split_plan.execution_periods if item.name == period_name)
+    if period.final_liquidation_open is not None:
+        allocations = tuple(item for item in allocations if item.valid_from < period.final_liquidation_open)
     backtest = simulate_strategy(dataset.snapshot, rows, allocations, config.task, config.backtest, period)
     return allocations, backtest
 
@@ -254,6 +266,8 @@ def persist_run(
     inherited_scoring_coverage: dict[str, Any] | None = None,
     parent_run_id: str | None = None,
     parent_model_ref: str | None = None,
+    reservation: dict[str, Any] | None = None,
+    decision_id: str | None = None,
 ) -> RunResult:
     prediction_record = _write_prediction(store, run_id, predictions)
     candidate_prediction_records = []
@@ -328,6 +342,9 @@ def persist_run(
         "seed": config.models.seed,
         "task": config.task.kind,
         "return_convention": return_convention(config.statistics.frequency),
+        "execution_evidence_version": "period-bounded-next-open.v2",
+        "snapshot_reservation": reservation,
+        "decision_id": decision_id,
         "statistics_frequency": config.statistics.frequency,
         "statistics_calendar": dataset.snapshot.calendar,
         "model_bundles": model_dirs,
@@ -398,9 +415,25 @@ def run_experiment(
     if dataset is not None and dataset_ref is not None:
         raise ValueError("Pass either dataset or dataset_ref, not both")
     prepared = dataset or prepare_dataset(config, dataset_ref=dataset_ref)
+    if dataset is not None or dataset_ref is not None:
+        trusted = prepare_dataset(config)
+        if (
+            prepared.snapshot.snapshot_hash != trusted.snapshot.snapshot_hash
+            or _split_hash(prepared) != _split_hash(trusted)
+            or prepared.feature_specification != trusted.feature_specification
+            or not prepared.features.equals(trusted.features)
+            or not prepared.labels.equals(trusted.labels)
+            or prepared.config.resolved_config_hash != config.resolved_config_hash
+        ):
+            raise ValueError("Supplied prepared dataset does not match rebuilt trusted source and effective configuration")
+        prepared = trusted
     store = ArtifactStore(get_platform_config().paths.artifacts_dir)
-    run_id = store.create_run()
     ledger = TrialLedger(get_platform_config().paths.artifacts_dir / "trials.sqlite")
+    reservation = ledger.reserve_snapshot(
+        snapshot_hash=prepared.snapshot.snapshot_hash,
+        holdout_start=prepared.split_plan.holdout_start.isoformat(),
+        holdout_end=prepared.split_plan.holdout_end.isoformat(),
+    )
     logical_trial, attempt_id, _ = ledger.register_attempt(
         campaign=config.campaign.name,
         config_hash=config.resolved_config_hash,
@@ -409,12 +442,17 @@ def run_experiment(
         settings={
             "task": config.task.kind,
             "models": config.models.model_dump(mode="json"),
+            "candidate_context": {
+                key: value for key, value in config.model_dump(mode="json").items() if key not in {"campaign", "data", "models"}
+            },
             "frequency": config.statistics.frequency,
             "return_convention": return_convention(config.statistics.frequency),
+            "execution_evidence_version": "period-bounded-next-open.v2",
             "calendar": prepared.snapshot.calendar,
             "cost_treatment": "fees+slippage",
         },
     )
+    run_id = store.create_run()
     bundles: list[FoldBundle] = []
     candidate_status: list[dict[str, Any]] = []
     try:
@@ -525,6 +563,26 @@ def run_experiment(
         )
         candidate_status.append({"selected_model": selected_name})
         allocations, backtest = _strategy_result(prepared, predictions, config, period_name="development")
+        challenger_returns: dict[str, dict[str, Any]] = {}
+        for name, candidate_predictions, _, _ in candidates:
+            if name == "baseline":
+                continue
+            try:
+                candidate_backtest = (
+                    backtest
+                    if name == selected_name
+                    else _strategy_result(prepared, candidate_predictions, config, period_name="development")[1]
+                )
+                series = _statistical_backtest_returns(
+                    candidate_backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar
+                )
+                if series is not None:
+                    challenger_returns[name] = {
+                        "returns": series.to_list(),
+                        "timestamps": [timestamp.isoformat() for timestamp in series.index],
+                    }
+            except Exception as exc:
+                challenger_returns[name] = {"error": repr(exc)}
         evidence_metrics = ()
         if backtest.net_returns is not None:
             statistical_net = _statistical_backtest_returns(
@@ -558,6 +616,7 @@ def run_experiment(
             bundles=tuple(bundles),
             candidate_status=candidate_status,
             candidate_predictions=candidate_prediction_sets,
+            reservation=reservation,
         )
         ledger.update_attempt(
             attempt_id,
@@ -566,7 +625,9 @@ def run_experiment(
                 "run_id": run_id,
                 "logical_trial_id": logical_trial,
                 "return_convention": return_convention(config.statistics.frequency),
+                "execution_evidence_version": "period-bounded-next-open.v2",
                 "calendar": prepared.snapshot.calendar,
+                "challenger_returns": challenger_returns,
                 "development_net_returns": (
                     _statistical_backtest_returns(
                         backtest, frequency=config.statistics.frequency, calendar=prepared.snapshot.calendar
@@ -741,6 +802,7 @@ def campaign_evidence(run_id: str, *, artifacts_dir: str | Path | None = None) -
             cost_treatment="fees+slippage",
             task=result.artifact_manifest.get("task"),
             return_convention=convention,
+            execution_evidence_version=result.artifact_manifest.get("execution_evidence_version"),
         )
         trial_sharpes = []
         for item in series["complete"]:
@@ -791,6 +853,167 @@ def campaign_evidence(run_id: str, *, artifacts_dir: str | Path | None = None) -
         )
         sidecar = EvidenceStore(artifacts_dir or get_platform_config().paths.artifacts_dir).write(report.model_dump(mode="json"))
         return {**report.model_dump(mode="json"), "evidence_sidecar": sidecar, "metrics": metrics}
+    finally:
+        ledger.close()
+
+
+def _holdout_decision_inputs(result: RunResult, model_name: str, ledger: TrialLedger) -> dict[str, Any]:
+    manifest = result.artifact_manifest
+    config = PipelineConfig.from_artifact_config(
+        manifest["config"], schema_version=manifest.get("config_schema_version"), expected_hash=result.ref.config_hash
+    )
+    frequency = config.statistics.frequency
+    convention = return_convention(frequency)
+    evidence = ledger.candidate_search_evidence(
+        snapshot_hash=result.ref.snapshot_hash,
+        evaluation_hash=result.ref.split_hash,
+        frequency=frequency,
+        task=config.task.kind,
+        return_convention=convention,
+        min_observations=max(30, config.statistics.min_observations),
+        calendar=result.snapshot.calendar if result.snapshot is not None else None,
+        backtest_policy=config.backtest.model_dump(mode="json"),
+        target_policy=config.task.model_dump(mode="json"),
+    )
+    trials = ledger.trials(snapshot_hash=result.ref.snapshot_hash)
+    run_attempt = next(
+        (
+            attempt
+            for trial in trials
+            if trial["config_hash"] == result.ref.config_hash
+            and trial["snapshot_hash"] == result.ref.snapshot_hash
+            and trial["evaluation_hash"] == result.ref.split_hash
+            and not trial["settings"].get("parent_prediction_run")
+            for attempt in ledger.attempts(trial["logical_trial_id"])
+            if attempt["status"] == "completed" and (attempt.get("result") or {}).get("run_id") == result.ref.run_id
+        ),
+        None,
+    )
+    current_returns = (run_attempt or {}).get("result", {}).get("development_net_returns")
+    selected_candidate = next(
+        (item for item in evidence["complete"] if item["run_id"] == result.ref.run_id and item["model"] == model_name),
+        None,
+    )
+    saved_series = (
+        _statistical_backtest_returns(result.backtest, frequency=frequency, calendar=result.snapshot.calendar)
+        if result.backtest is not None and result.snapshot is not None and result.backtest.net_returns is not None
+        else None
+    )
+    if (
+        selected_candidate is None
+        or selected_candidate["returns"] != current_returns
+        or saved_series is None
+        or selected_candidate["returns"] != saved_series.to_list()
+        or selected_candidate["timestamps"] != [timestamp.isoformat() for timestamp in saved_series.index]
+    ):
+        current_returns = None
+    gate = evaluate_gate(
+        candidates=manifest.get("candidates", []),
+        selected_model=model_name,
+        task=config.task.kind,
+        returns=current_returns,
+        comparable=evidence["complete"],
+        exclusions=evidence["exclusions"],
+        trial_count=evidence["K"],
+        frequency=frequency,
+        min_observations=config.statistics.min_observations,
+    )
+    gate["evidence"].update(
+        {
+            "source_run_id": result.ref.run_id,
+            "snapshot_hash": result.ref.snapshot_hash,
+            "split_hash": result.ref.split_hash,
+            "holdout_start": manifest.get("snapshot_reservation", {}).get("holdout_start"),
+            "holdout_end": manifest.get("snapshot_reservation", {}).get("holdout_end"),
+            "candidate_keys": evidence["candidate_keys"],
+            "requested_attempt_id": (run_attempt or {}).get("attempt_id"),
+        }
+    )
+    audit_inputs = {
+        "policy_version": gate["evidence"]["policy_version"],
+        "source_run_id": result.ref.run_id,
+        "source_config_hash": result.ref.config_hash,
+        "snapshot_hash": result.ref.snapshot_hash,
+        "split_hash": result.ref.split_hash,
+        "selected_model": model_name,
+        "trial_count": evidence["K"],
+        "trials": [
+            {
+                "logical_trial_id": item["logical_trial_id"],
+                "settings": item["settings"],
+                "attempts": [
+                    {"attempt_id": attempt["attempt_id"], "status": attempt["status"], "result": attempt["result"]}
+                    for attempt in ledger.attempts(item["logical_trial_id"])
+                ],
+            }
+            for item in trials
+        ],
+        "comparable": evidence["complete"],
+        "exclusions": evidence["exclusions"],
+    }
+
+    def finite_json(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: finite_json(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [finite_json(item) for item in value]
+        if isinstance(value, float) and not math.isfinite(value):
+            return f"nonfinite:{value}"
+        return value
+
+    gate["evidence"]["evidence_digest"] = hashlib.sha256(
+        json.dumps(finite_json(audit_inputs), sort_keys=True, separators=(",", ":"), default=str, allow_nan=False).encode()
+    ).hexdigest()
+    return gate
+
+
+def preview_holdout(run_id: str, *, model_name: str | None = None) -> dict[str, Any]:
+    """Read-only advisory evaluation of the current holdout gate inputs."""
+    result = load_run(run_id)
+    if result.ref.parent_run_id is not None or result.snapshot is None:
+        raise ValueError("Holdout preview requires a completed development run")
+    selected = model_name or next(
+        (item.get("selected_model") for item in result.artifact_manifest.get("candidates", []) if item.get("selected_model")),
+        None,
+    )
+    if selected is None:
+        raise ValueError("Saved development winner is missing")
+    ledger_path = get_platform_config().paths.artifacts_dir / "trials.sqlite"
+    if not ledger_path.is_file():
+        raise ValueError("Holdout ledger is not initialized for this store")
+    ledger = TrialLedger.read_only(ledger_path)
+    try:
+        reservation = ledger.snapshot_reservation(result.ref.snapshot_hash)
+        saved_reservation = result.artifact_manifest.get("snapshot_reservation") or {}
+        if (
+            reservation is None
+            or reservation["eligibility"] != "eligible"
+            or reservation["holdout_start"] != saved_reservation.get("holdout_start")
+            or reservation["holdout_end"] != saved_reservation.get("holdout_end")
+        ):
+            gate = {"verdict": "REJECTED_INSUFFICIENT_EVIDENCE", "evidence": {"reason": "LEGACY_BOUNDARY_UNVERIFIED"}}
+        else:
+            winner = next(
+                (
+                    item.get("selected_model")
+                    for item in result.artifact_manifest.get("candidates", [])
+                    if item.get("selected_model")
+                ),
+                None,
+            )
+            if model_name is not None and model_name != winner:
+                gate = {"verdict": "REJECTED_MODEL_MISMATCH", "evidence": {"reason": "MODEL_IS_NOT_SAVED_WINNER"}}
+            else:
+                gate = _holdout_decision_inputs(result, selected, ledger)
+        if ledger.seal(result.ref.snapshot_hash):
+            gate = {"verdict": "REJECTED_HOLDOUT_SEALED", "evidence": {**gate["evidence"], "reason": "HOLDOUT_ALREADY_SEALED"}}
+        return {
+            "verdict": gate["verdict"],
+            "evidence": gate["evidence"],
+            "decision_id": None,
+            "child_run_id": None,
+            "advisory": True,
+        }
     finally:
         ledger.close()
 
@@ -883,71 +1106,171 @@ def evaluate_holdout(
         expected_hash=result.ref.config_hash,
     )
     config = config or original
-    if allocation_overrides or backtest_overrides:
-        values = config.model_dump(mode="python")
-        values["allocation"] = {**values["allocation"], **(allocation_overrides or {})}
-        values["backtest"] = {**values["backtest"], **(backtest_overrides or {})}
-        config = PipelineConfig(**values)
-    legacy_hash_matches = config.source_provenance.get("legacy_artifact_config_hash") == result.ref.config_hash
-    if (
-        config.resolved_config_hash != result.ref.config_hash
-        and not legacy_hash_matches
-        and not (allocation_overrides or backtest_overrides)
-    ):
+    if allocation_overrides is not None or backtest_overrides is not None:
+        raise ValueError("Holdout allocation and backtest overrides are not supported")
+    if config.resolved_config_hash != result.ref.config_hash:
         raise ValueError("Holdout configuration differs from the selected development run")
     if result.snapshot is None:
         raise ValueError("Selected run has no saved snapshot")
-    store = ArtifactStore(get_platform_config().paths.artifacts_dir)
-    selection_suffix = hashlib.sha256(
-        json.dumps([model_name, allocation_overrides, backtest_overrides], sort_keys=True, default=str).encode()
-    ).hexdigest()[:12]
-    child_id = f"{run_id}-holdout-{selection_suffix}"
-    if (store.run_dir(child_id) / "manifest.json").exists():
-        return load_run(child_id)
-    existing_holdout_variants = list((store.root / "runs").glob(f"{run_id}-holdout-*"))
-    exploratory_reuse = bool(existing_holdout_variants)
-    dataset = prepare_dataset(config, snapshot=result.snapshot)
-    if dataset.snapshot.snapshot_hash != result.ref.snapshot_hash or _split_hash(dataset) != result.ref.split_hash:
-        raise ValueError("Saved snapshot or evaluation schedule changed")
-    selected = model_name or next(
+    winner = next(
         (item.get("selected_model") for item in result.artifact_manifest.get("candidates", []) if item.get("selected_model")),
         None,
     )
-    if selected is None:
-        raise ValueError("Selected development candidate is missing")
+    if winner is None:
+        raise ValueError("Selected development run has no saved tournament winner")
+    store = ArtifactStore(get_platform_config().paths.artifacts_dir)
+    ledger_path = get_platform_config().paths.artifacts_dir / "trials.sqlite"
+    if not ledger_path.is_file():
+        raise ValueError("Holdout ledger is not initialized for this store")
+    ledger = TrialLedger(ledger_path)
+    reservation = ledger.snapshot_reservation(result.ref.snapshot_hash)
+    if reservation is None or reservation["eligibility"] != "eligible":
+        decision = ledger.record_decision(
+            decision_id=f"decision-{uuid.uuid4().hex}",
+            snapshot_hash=result.ref.snapshot_hash,
+            source_run_id=run_id,
+            model_name=model_name or winner,
+            verdict="REJECTED_INSUFFICIENT_EVIDENCE",
+            evidence={"reason": "LEGACY_BOUNDARY_UNVERIFIED", "source_run_id": run_id, "snapshot_hash": result.ref.snapshot_hash},
+        )
+        ledger.close()
+        raise HoldoutRejected(decision)
+    if reservation["holdout_start"] != result.artifact_manifest.get("snapshot_reservation", {}).get(
+        "holdout_start"
+    ) or reservation["holdout_end"] != result.artifact_manifest.get("snapshot_reservation", {}).get("holdout_end"):
+        decision = ledger.record_decision(
+            decision_id=f"decision-{uuid.uuid4().hex}",
+            snapshot_hash=result.ref.snapshot_hash,
+            source_run_id=run_id,
+            model_name=model_name or winner,
+            verdict="REJECTED_INSUFFICIENT_EVIDENCE",
+            evidence={"reason": "RESERVATION_MISMATCH", "source_run_id": run_id, "snapshot_hash": result.ref.snapshot_hash},
+        )
+        ledger.close()
+        raise HoldoutRejected(decision)
+    existing_seal = ledger.seal(result.ref.snapshot_hash)
+    resume_seal = None
+    if existing_seal:
+        prior_decision = ledger.decision(existing_seal["decision_id"]) or {}
+        if (
+            existing_seal["execution_status"] == "reserved"
+            and prior_decision.get("source_run_id") == run_id
+            and prior_decision.get("model_name") == winner
+            and (model_name is None or model_name == winner)
+        ):
+            resume_seal = existing_seal
+        else:
+            if existing_seal["execution_status"] in {"completed", "running"}:
+                try:
+                    sealed_result = load_run(existing_seal["child_run_id"])
+                    if (
+                        sealed_result.ref.parent_run_id == run_id
+                        and sealed_result.artifact_manifest.get("decision_id") == existing_seal["decision_id"]
+                        and sealed_result.ref.snapshot_hash == result.ref.snapshot_hash
+                        and sealed_result.ref.config_hash == result.ref.config_hash
+                        and sealed_result.ref.split_hash == result.ref.split_hash
+                        and (model_name is None or model_name == winner)
+                    ):
+                        if existing_seal["execution_status"] == "running":
+                            for trial in ledger.trials(snapshot_hash=result.ref.snapshot_hash):
+                                if (
+                                    trial["settings"].get("evaluation") != "holdout"
+                                    or trial["settings"].get("selected_run") != run_id
+                                ):
+                                    continue
+                                for prior_attempt in ledger.attempts(trial["logical_trial_id"]):
+                                    if prior_attempt["status"] == "running":
+                                        ledger.update_attempt(
+                                            prior_attempt["attempt_id"],
+                                            status="completed",
+                                            result={
+                                                "run_id": sealed_result.ref.run_id,
+                                                "logical_trial_id": trial["logical_trial_id"],
+                                            },
+                                        )
+                            ledger.update_seal(result.ref.snapshot_hash, status="completed", owner_id=existing_seal["owner_id"])
+                        ledger.close()
+                        return sealed_result
+                except (FileNotFoundError, ValueError):
+                    pass
+            ledger.close()
+            raise HoldoutRejected(
+                {
+                    "verdict": "REJECTED_HOLDOUT_SEALED",
+                    "evidence": {
+                        **prior_decision.get("evidence", {}),
+                        "reason": f"HOLDOUT_{existing_seal['execution_status'].upper()}",
+                    },
+                    "decision_id": existing_seal["decision_id"],
+                    "execution_status": existing_seal["execution_status"],
+                }
+            )
+    if model_name is not None and model_name != winner:
+        decision = ledger.record_decision(
+            decision_id=f"decision-{uuid.uuid4().hex}",
+            snapshot_hash=result.ref.snapshot_hash,
+            source_run_id=run_id,
+            model_name=model_name,
+            verdict="REJECTED_MODEL_MISMATCH",
+            evidence={"reason": "MODEL_IS_NOT_SAVED_WINNER", "selected_model": model_name, "saved_winner": winner},
+        )
+        ledger.close()
+        raise HoldoutRejected(decision)
+    dataset = prepare_dataset(config, snapshot=result.snapshot)
+    if dataset.snapshot.snapshot_hash != result.ref.snapshot_hash or _split_hash(dataset) != result.ref.split_hash:
+        ledger.close()
+        raise ValueError("Saved snapshot or evaluation schedule changed")
     selected_candidate = next(
         (
             item
             for item in result.artifact_manifest.get("candidates", [])
-            if item.get("model") == selected and item.get("status") == "completed"
+            if item.get("model") == winner and item.get("status") == "completed"
         ),
         None,
     )
     if selected_candidate is None:
-        raise ValueError(f"Candidate '{selected}' is not a completed development candidate")
-    model_name = selected
-    selected_candidate = next(
-        item
-        for item in result.artifact_manifest.get("candidates", [])
-        if item.get("model") == model_name and item.get("status") == "completed"
+        ledger.close()
+        raise ValueError(f"Candidate '{winner}' is not a completed development candidate")
+    selection_suffix = hashlib.sha256(
+        json.dumps([winner, result.ref.config_hash, result.ref.split_hash], sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+    child_id = f"{run_id}-holdout-{selection_suffix}"
+    decision_id = resume_seal["decision_id"] if resume_seal else f"decision-{uuid.uuid4().hex}"
+    if resume_seal and resume_seal["child_run_id"] != child_id:
+        ledger.close()
+        raise ValueError("Reserved holdout child does not match the verified source identity")
+    recorded = (
+        ledger.decision(decision_id)
+        if resume_seal
+        else ledger.record_decision(
+            decision_id=decision_id,
+            snapshot_hash=result.ref.snapshot_hash,
+            source_run_id=run_id,
+            model_name=winner,
+            verdict="REJECTED_INSUFFICIENT_EVIDENCE",
+            evidence={},
+            child_run_id=child_id,
+            evidence_factory=lambda: _holdout_decision_inputs(result, winner, ledger),
+        )
     )
+    if recorded.get("verdict") != "PASSED":
+        ledger.close()
+        raise HoldoutRejected(recorded)
+    execution_owner = uuid.uuid4().hex
+    ledger.update_seal(result.ref.snapshot_hash, status="running", owner_id=execution_owner)
+    if (store.run_dir(child_id) / "manifest.json").exists():
+        ledger.update_seal(result.ref.snapshot_hash, status="interrupted", owner_id=execution_owner)
+        ledger.close()
+        raise HoldoutRejected({"verdict": "REJECTED_HOLDOUT_SEALED", "evidence": {"reason": "UNVERIFIED_CHILD_ARTIFACT"}})
+    existing_holdout_variants = list((store.root / "runs").glob(f"{run_id}-holdout-*"))
+    exploratory_reuse = bool(existing_holdout_variants)
+    ledger.close()
+    selected = winner
+    model_name = selected
     durations = [int(value) for value in selected_candidate.get("selected_durations", []) if int(value) > 0]
     holdout_duration = int(np.floor(np.median(durations) + 0.5)) if durations else None
-    ledger = TrialLedger(get_platform_config().paths.artifacts_dir / "trials.sqlite")
-    logical, attempt, _ = ledger.register_attempt(
-        campaign=config.campaign.name,
-        config_hash=config.resolved_config_hash,
-        snapshot_hash=result.ref.snapshot_hash,
-        evaluation_hash=result.ref.split_hash,
-        settings={
-            "evaluation": "holdout",
-            "selected_run": run_id,
-            "model": selected,
-            "allocation": config.allocation.model_dump(mode="json"),
-            "backtest": config.backtest.model_dump(mode="json"),
-        },
-    )
-    store.create_run(child_id)
+    ledger = TrialLedger(ledger_path)
+    attempt = None
     holdout_spec = FoldSpec(
         fold_id=-1,
         train_start=dataset.split_plan.development_start,
@@ -956,6 +1279,20 @@ def evaluate_holdout(
         validation_end=dataset.split_plan.holdout_end,
     )
     try:
+        logical, attempt, _ = ledger.register_attempt(
+            campaign=config.campaign.name,
+            config_hash=config.resolved_config_hash,
+            snapshot_hash=result.ref.snapshot_hash,
+            evaluation_hash=result.ref.split_hash,
+            settings={
+                "evaluation": "holdout",
+                "selected_run": run_id,
+                "model": selected,
+                "allocation": config.allocation.model_dump(mode="json"),
+                "backtest": config.backtest.model_dump(mode="json"),
+            },
+        )
+        store.create_run(child_id)
         bundle = prepare_fold(dataset, holdout_spec)
         model = train_fold(bundle, config, model_name=selected, duration=holdout_duration)
         model_dir = store.run_dir(child_id) / "models" / f"{model_name}-holdout"
@@ -986,12 +1323,18 @@ def evaluate_holdout(
                 }
             ],
             parent_run_id=run_id,
+            reservation=reservation,
+            decision_id=decision_id,
         )
         ledger.update_attempt(attempt, status="completed", result={"run_id": child_id, "logical_trial_id": logical})
+        ledger.update_seal(result.ref.snapshot_hash, status="completed", owner_id=execution_owner)
         return holdout_result
     except Exception as exc:
-        store.mark_failed(child_id, repr(exc), {"parent_run_id": run_id})
-        ledger.update_attempt(attempt, status="failed", error=repr(exc))
+        if store.run_dir(child_id).exists():
+            store.mark_failed(child_id, repr(exc), {"parent_run_id": run_id})
+        if attempt is not None:
+            ledger.update_attempt(attempt, status="failed", error=repr(exc))
+        ledger.update_seal(result.ref.snapshot_hash, status="failed", owner_id=execution_owner)
         raise
     finally:
         ledger.close()
@@ -1041,8 +1384,39 @@ def evaluate_saved_predictions(
     ).hexdigest()[:12]
     child_id = f"{run_id}-child-{suffix}"
     if (store.run_dir(child_id) / "manifest.json").exists():
+        ledger_path = get_platform_config().paths.artifacts_dir / "trials.sqlite"
+        existing = TrialLedger.read_only(ledger_path)
+        try:
+            matches = [
+                attempt
+                for trial in existing.trials(snapshot_hash=parent.ref.snapshot_hash)
+                if trial["settings"].get("parent_prediction_run") == run_id
+                for attempt in existing.attempts(trial["logical_trial_id"])
+                if attempt["status"] == "completed" and (attempt["result"] or {}).get("run_id") == child_id
+            ]
+        finally:
+            existing.close()
+        if not matches:
+            raise ValueError("Saved prediction variant has no matching completed ledger attempt")
         return load_run(child_id)
     ledger = TrialLedger(get_platform_config().paths.artifacts_dir / "trials.sqlite")
+    reservation = parent.artifact_manifest.get("snapshot_reservation")
+    if not isinstance(reservation, dict) or not reservation.get("holdout_start") or not reservation.get("holdout_end"):
+        ledger.close()
+        raise ValueError("Saved development source has no verified snapshot reservation")
+    try:
+        ledger.reserve_snapshot(
+            snapshot_hash=parent.ref.snapshot_hash,
+            holdout_start=reservation["holdout_start"],
+            holdout_end=reservation["holdout_end"],
+        )
+        dataset = prepare_dataset(config, snapshot=parent.snapshot)
+        if dataset.snapshot.snapshot_hash != parent.ref.snapshot_hash or _split_hash(dataset) != parent.ref.split_hash:
+            raise ValueError("Saved evaluation schedule or snapshot changed")
+    except Exception:
+        ledger.close()
+        raise
+    parent_models = saved_config.models.model_dump(mode="json")
     logical, attempt, _ = ledger.register_attempt(
         campaign=config.campaign.name,
         config_hash=config.resolved_config_hash,
@@ -1051,15 +1425,26 @@ def evaluate_saved_predictions(
         settings={
             "evaluation": "development",
             "parent_prediction_run": run_id,
+            "model": selected_name,
+            "model_spec": parent_models.get(selected_name),
+            "model_global_settings": {
+                key: value for key, value in parent_models.items() if key not in {"baseline", "xgboost", "gru", "lstm"}
+            },
+            "task": config.task.kind,
+            "frequency": config.statistics.frequency,
+            "return_convention": return_convention(config.statistics.frequency),
+            "execution_evidence_version": "period-bounded-next-open.v2",
+            "calendar": parent.snapshot.calendar,
+            "cost_treatment": "fees+slippage",
+            "candidate_context": {
+                key: value for key, value in config.model_dump(mode="json").items() if key not in {"campaign", "data", "models"}
+            },
             "allocation": config.allocation.model_dump(mode="json"),
             "backtest": config.backtest.model_dump(mode="json"),
         },
     )
     store.create_run(child_id)
     try:
-        dataset = prepare_dataset(config, snapshot=parent.snapshot)
-        if _split_hash(dataset) != parent.ref.split_hash:
-            raise ValueError("Saved evaluation schedule changed")
         allocations, backtest = _strategy_result(dataset, selected_predictions, config, period_name="development")
         result = persist_run(
             store=store,
@@ -1076,7 +1461,23 @@ def evaluate_saved_predictions(
             inherited_scoring_coverage=parent.artifact_manifest.get("scored_coverage"),
             candidate_status=[{"model": model_name or parent.ref.model_ref, "selection_source": "saved_development_predictions"}],
         )
-        ledger.update_attempt(attempt, status="completed", result={"run_id": child_id, "logical_trial_id": logical})
+        series = _statistical_backtest_returns(backtest, frequency=config.statistics.frequency, calendar=parent.snapshot.calendar)
+        ledger.update_attempt(
+            attempt,
+            status="completed",
+            result={
+                "run_id": child_id,
+                "logical_trial_id": logical,
+                "challenger_returns": {
+                    selected_name: {
+                        "returns": series.to_list(),
+                        "timestamps": [timestamp.isoformat() for timestamp in series.index],
+                    }
+                }
+                if selected_name != "baseline" and series is not None
+                else {},
+            },
+        )
         return result
     except Exception as exc:
         store.mark_failed(child_id, repr(exc), {"parent_run_id": run_id})

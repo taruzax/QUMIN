@@ -5,4 +5,4 @@ paths:
 
 mlflow:
   enabled: true
-  experiment_name: "quant-ml-lab"
+  experiment_name: "qumin"
