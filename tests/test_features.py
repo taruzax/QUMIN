@@ -110,18 +110,40 @@ def test_sector_dummies_missing_sector_raises():
 
 
 def test_technical_indicators_columns_exist(single_ticker_df):
-    """Verify that TA-Lib correctly attaches the new indicator columns."""
-    df = single_ticker_df
-    result = calculate_technical_indicators(df)
+    result = calculate_technical_indicators(single_ticker_df)
     expected_columns = ["ema5", "macd", "cdl2crows", "wclprice"]
 
     for col in expected_columns:
         assert col in result.columns, f"Missing technical indicator column: {col}"
+        assert result[col].is_finite().any(), f"Column {col} contains no finite values"
 
-        # Verify that TA-Lib actually calculated data and didn't just return all nulls
-        # (It is completely normal for the first N rows to be null while indicators warm up)
-        valid_count = result[col].is_not_null().sum()
-        assert valid_count > 0, f"Column {col} was created but contains entirely null values!"
 
-    print("\n\n--- Sample Data (Last 5 rows) ---")
-    print(result.select(["timestamp"] + expected_columns).tail(5))
+def test_technical_indicator_values_and_warmup_are_ticker_local():
+    open_prices = [99.8] * 10 + [100.0, 114.0, 113.0] + [104.0] * 27
+    close_prices = [100.0] * 10 + [110.0, 111.0, 105.0] + [105.0] * 27
+    bars = pl.DataFrame({"open": open_prices, "close": close_prices}).with_row_index("bar")
+    first = bars.with_columns(ticker=pl.lit("A"))
+    second = bars.with_columns(ticker=pl.lit("B"), close=pl.col("close") + 50, open=pl.col("open") + 50)
+    interleaved = (
+        pl.concat([first, second])
+        .sort(["bar", "ticker"])
+        .with_columns(high=pl.max_horizontal("open", "close") + 1, low=pl.min_horizontal("open", "close") - 1)
+    )
+    result = calculate_technical_indicators(interleaved)
+
+    for ticker, offset in (("A", 0.0), ("B", 50.0)):
+        rows = result.filter(pl.col("ticker") == ticker)
+        assert rows["ema5"][:4].is_nan().all()
+        assert rows["ema5"][4] == 100.0 + offset
+        assert rows["ema5"][12] == pytest.approx(105.5925925925926 + offset, rel=0, abs=1e-12)
+        assert rows["macd"][:33].is_nan().all()
+        assert rows["macd"][33] == pytest.approx(0.8104033267529474, rel=0, abs=1e-12)
+        assert rows["macd"][34] == pytest.approx(0.7503734506971682, rel=0, abs=1e-12)
+        assert rows["cdl2crows"].dtype == pl.Int32
+        assert rows["cdl2crows"].to_list() == [0] * 12 + [-100] + [0] * 27
+        assert rows["wclprice"][12] == 107.0 + offset
+
+    for size in (0, 4):
+        short = calculate_technical_indicators(interleaved.head(size))
+        assert short.height == size
+        assert short["macd"].is_nan().all()

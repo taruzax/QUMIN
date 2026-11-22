@@ -1,43 +1,19 @@
-import importlib
+import asyncio
 import json
-import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
+import lab.mcp_server as mcp_server_module
 from lab.core.config import PipelineConfig
 from lab.core.contracts import CampaignPlan, ExperimentVariation
 from lab.platform.campaign_store import CampaignStore
 
 
 @pytest.fixture
-def mcp_server(monkeypatch):
-    class StubFastMCP:
-        def __init__(self, _name):
-            pass
-
-        def tool(self, *, name):
-            return lambda function: function
-
-        def run(self, **_kwargs):
-            return None
-
-    mcp_module = ModuleType("mcp")
-    server_module = ModuleType("mcp.server")
-    fastmcp_module = ModuleType("mcp.server.fastmcp")
-    fastmcp_module.FastMCP = StubFastMCP
-    server_module.fastmcp = fastmcp_module
-    mcp_module.server = server_module
-    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
-    monkeypatch.setitem(sys.modules, "mcp.server", server_module)
-    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
-    previous = sys.modules.pop("lab.mcp_server", None)
-    module = importlib.import_module("lab.mcp_server")
-    yield module
-    sys.modules.pop("lab.mcp_server", None)
-    if previous is not None:
-        sys.modules["lab.mcp_server"] = previous
+def mcp_server():
+    return mcp_server_module
 
 
 def _campaign_plan(campaign_id: str) -> CampaignPlan:
@@ -61,6 +37,20 @@ def _campaign_plan(campaign_id: str) -> CampaignPlan:
         max_planned_experiments=2,
         worker_count=1,
     )
+
+
+def test_mcp_server_advertises_exactly_expected_tools(mcp_server):
+    tools = asyncio.run(mcp_server.mcp.list_tools())
+    tool_names = [tool.name for tool in tools]
+    assert len(tool_names) == 4
+    assert set(tool_names) == {
+        "list_snapshots",
+        "run_experiment",
+        "run_campaign",
+        "trial_evidence",
+    }
+    assert "request_holdout" not in tool_names
+    assert not hasattr(mcp_server, "request_holdout")
 
 
 def test_campaign_adapter_returns_persisted_results_on_fresh_and_resumed_calls(tmp_path, monkeypatch, mcp_server):
@@ -97,23 +87,40 @@ def test_campaign_adapter_returns_persisted_results_on_fresh_and_resumed_calls(t
             raise AssertionError("MCP adapter must not finalize a campaign")
 
     monkeypatch.setattr(mcp_server, "CampaignStore", ReadOnlyCampaignStore)
+
+    # 1. Partial failure: variation-1 completes, variation-2 fails
     first = mcp_server.run_campaign("campaign.yaml")
+    assert first["campaign_id"] == plan.campaign_id
+    assert [item["status"] for item in first["results"]] == ["completed", "failed"]
     first_payload = json.loads(Path(first["campaign_result"]["bundle_path"]).read_text())
     assert [entry["status"] for entry in first_payload["entries"]] == ["completed", "failed"]
+    assert first["completed_runs"] == [{"variation_id": "variation-1", "run_id": "run-variation-1"}]
 
+    # 2. Resumed success: variation-2 is retried and completes
     second = mcp_server.run_campaign("campaign.yaml")
+    assert second["campaign_id"] == plan.campaign_id
     assert [item["status"] for item in second["results"]] == ["completed"]
     assert all(
         entry["status"] == "completed"
         for entry in json.loads(Path(second["campaign_result"]["bundle_path"]).read_text())["entries"]
     )
+    assert second["completed_runs"] == [
+        {"variation_id": "variation-1", "run_id": "run-variation-1"},
+        {"variation_id": "variation-2", "run_id": "run-variation-2"},
+    ]
 
+    # 3. Fully completed rerun: all variations completed, empty results, completed_runs still full
     resumed = mcp_server.run_campaign("campaign.yaml")
+    assert resumed["campaign_id"] == plan.campaign_id
     assert resumed["results"] == []
     assert resumed["campaign_result"] == second["campaign_result"]
+    assert resumed["completed_runs"] == [
+        {"variation_id": "variation-1", "run_id": "run-variation-1"},
+        {"variation_id": "variation-2", "run_id": "run-variation-2"},
+    ]
 
 
-def test_mcp_tool_wrappers_keep_read_only_preview_and_require_holdout_acknowledgement(tmp_path, monkeypatch, mcp_server):
+def test_mcp_tool_wrappers_keep_read_only_preview(tmp_path, monkeypatch, mcp_server):
     platform = SimpleNamespace(paths=SimpleNamespace(snapshot_dir=tmp_path, artifacts_dir=tmp_path))
     monkeypatch.setattr(mcp_server, "get_platform_config", lambda: platform)
     closed = []
@@ -146,18 +153,3 @@ def test_mcp_tool_wrappers_keep_read_only_preview_and_require_holdout_acknowledg
     )
     assert mcp_server.trial_evidence("run-1", "xgboost") == {"advisory": True}
     assert previews == [("run-1", "xgboost")]
-
-    evaluations = []
-
-    def evaluate(*args, **kwargs):
-        evaluations.append((args, kwargs))
-        raise mcp_server.HoldoutRejected({"verdict": "REJECTED_BY_BASELINE", "execution_status": "rejected"})
-
-    monkeypatch.setattr(mcp_server, "evaluate_holdout", evaluate)
-    with pytest.raises(ValueError, match="acknowledge_holdout=true"):
-        mcp_server.request_holdout("run-1")
-    assert evaluations == []
-    rejected = mcp_server.request_holdout("run-1", acknowledge_holdout=True)
-    assert rejected["decision"]["verdict"] == "REJECTED_BY_BASELINE"
-    assert rejected["retryable"] is False
-    assert len(evaluations) == 1

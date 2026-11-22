@@ -5,13 +5,11 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-
 from lab.core.config import CampaignMatrixConfig, PipelineConfig, get_platform_config
 from lab.platform.campaign_store import CampaignStore
 from lab.platform.market_store import SnapshotCatalog
 from lab.research.campaign import execute_campaign, plan_campaign
-from lab.research.experiment import evaluate_holdout, preview_holdout, run_experiment
-from lab.research.holdout_gate import HoldoutRejected
+from lab.research.experiment import preview_holdout, run_experiment
 
 mcp = MCPServer("qumin")
 
@@ -47,12 +45,18 @@ def run_campaign(campaign_path: str, config_path: str | None = None) -> dict[str
     store = CampaignStore(get_platform_config().paths.artifacts_dir)
     try:
         outcome = store.latest_result(plan.campaign_id)
+        completed_runs = [
+            {"variation_id": entry.variation_id, "run_id": entry.run_id}
+            for entry in store.entries(plan.campaign_id)
+            if entry.status == "completed"
+        ]
     finally:
         store.close()
     return {
         "campaign_id": plan.campaign_id,
         "results": results,
         "campaign_result": outcome.model_dump(mode="json") if outcome else None,
+        "completed_runs": completed_runs,
     }
 
 
@@ -60,25 +64,6 @@ def run_campaign(campaign_path: str, config_path: str | None = None) -> dict[str
 def trial_evidence(run_id: str, model: str | None = None) -> dict[str, Any]:
     """Preview the current holdout gate without writing a decision."""
     return preview_holdout(run_id, model_name=model)
-
-
-@mcp.tool(name="request_holdout")
-def request_holdout(run_id: str, model: str | None = None, acknowledge_holdout: bool = False) -> dict[str, Any]:
-    """Request one holdout evaluation for the snapshot."""
-    if not acknowledge_holdout:
-        raise ValueError("Holdout request requires acknowledge_holdout=true")
-    try:
-        result = evaluate_holdout(run_id, model_name=model)
-    except HoldoutRejected as rejection:
-        return {
-            "decision": rejection.decision,
-            "retryable": rejection.decision.get("execution_status") in {"running", "reserved"},
-        }
-    return {
-        "run_id": result.ref.run_id,
-        "parent_run_id": run_id,
-        "decision_id": result.artifact_manifest.get("decision_id"),
-    }
 
 
 if __name__ == "__main__":

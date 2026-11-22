@@ -1,6 +1,5 @@
 import numpy as np
 import polars as pl
-import polars_talib as plta
 
 # pyrefly: ignore [missing-import]
 from lab.core.config import PipelineConfig, Timeframe
@@ -25,13 +24,51 @@ def calculate_dollar_volume(df: pl.DataFrame, config: PipelineConfig) -> pl.Data
     )
 
 
+def _sma_seeded_ema(price: pl.Expr, bar: pl.Expr, *, span: int, seed_bar: int) -> pl.Expr:
+    seeded_price = pl.when(bar > seed_bar).then(price).when(bar == seed_bar).then(price.rolling_mean(span))
+    return seeded_price.ewm_mean(span=span, adjust=False)
+
+
 def calculate_technical_indicators(df: pl.DataFrame) -> pl.DataFrame:
-    """Migrated from transform.py"""
+    """Calculate causal indicators in each ticker's existing row order."""
+    missing = float("nan")
+    close = pl.col("close").cast(pl.Float64).fill_null(missing)
+    bar = close.is_not_nan().cum_max().cum_sum()
+    ema5 = _sma_seeded_ema(close, bar, span=5, seed_bar=5)
+    # Both MACD EMAs begin at bar 26, with another eight bars for signal warm-up.
+    fast = _sma_seeded_ema(close, bar, span=12, seed_bar=26)
+    slow = _sma_seeded_ema(close, bar, span=26, seed_bar=26)
+    macd = pl.when(bar >= 34).then(fast - slow)
+
+    open_price = pl.col("open").cast(pl.Float64).fill_nan(None)
+    close_price = close.fill_nan(None)
+    high = pl.col("high").cast(pl.Float64)
+    low = pl.col("low").cast(pl.Float64)
+    body = (close_price - open_price).abs()
+    complete_candle = pl.all_horizontal(
+        open_price.is_not_null(), close_price.is_not_null(), high.fill_nan(None).is_not_null(), low.fill_nan(None).is_not_null()
+    )
+    candle_started = complete_candle.cum_max()
+    # Compare the first candle's body with the ten bodies immediately before it.
+    typical_body = pl.when(candle_started).then(body).rolling_mean(10).shift(3)
+    unusable_prior_body = (candle_started & ~body.is_finite().fill_null(False)).cum_max().shift(3)
+    two_crows = (
+        ~unusable_prior_body
+        & (close_price.shift(2) > open_price.shift(2))
+        & (body.shift(2) > typical_body)
+        & (open_price.shift(1) > close_price.shift(1))
+        & (close_price.shift(1) > close_price.shift(2))
+        & (open_price < open_price.shift(1))
+        & (open_price > close_price.shift(1))
+        & (close_price < open_price)
+        & (close_price > open_price.shift(2))
+        & (close_price < close_price.shift(2))
+    )
     return df.with_columns(
-        plta.ema(pl.col("close"), timeperiod=5).over("ticker").alias("ema5"),
-        plta.macd(pl.col("close"), fastperiod=12, slowperiod=26, signalperiod=9).over("ticker").struct.field("macd"),
-        plta.cdl2crows(pl.col("open"), pl.col("high"), pl.col("low"), pl.col("close")).over("ticker").alias("cdl2crows"),
-        plta.wclprice(pl.col("high"), pl.col("low"), pl.col("close")).over("ticker").alias("wclprice"),
+        ema5.fill_null(missing).over("ticker").alias("ema5"),
+        macd.fill_null(missing).over("ticker").alias("macd"),
+        pl.when(two_crows).then(-100).otherwise(0).over("ticker").alias("cdl2crows"),
+        ((high + low + 2 * close) / 4).fill_null(missing).alias("wclprice"),
     )
 
 
