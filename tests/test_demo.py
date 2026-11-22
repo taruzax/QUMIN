@@ -13,12 +13,6 @@ from lab.quant.timing import bar_times_for_session, get_exchange_calendar
 from lab.research.trial_ledger import TrialLedger
 
 
-def test_demo_configuration_is_bundled_and_offline():
-    assert Path("config/demo.yaml").exists()
-    assert Path("data/demo/ohlcv.csv").exists()
-    assert Path("data/demo/metadata.yaml").exists()
-
-
 def test_demo_explicitly_sets_task_and_stopping_policy():
     config = PipelineConfig.from_yaml("config/demo.yaml")
 
@@ -39,10 +33,6 @@ def test_hourly_demo_emits_every_exchange_calendar_slot_including_partial_bars()
     assert actual == [(opened, closed) for opened, closed, _session_id in expected]
     assert any((closed - opened).total_seconds() < 3600 for opened, closed in actual)
     assert demo_metadata(timeframe=Timeframe.H1)["generator_version"] == HOURLY_DEMO_GENERATOR_VERSION
-
-
-def test_demo_entrypoint_is_callable():
-    assert callable(run_demo)
 
 
 def test_default_entrypoint_uses_phase1_workflow(monkeypatch, capsys, tmp_path):

@@ -10,6 +10,7 @@ import lab.platform.dataset_store as dataset_store_module
 import lab.research.experiment as experiment_module
 import lab.research.preprocessing as preprocessing_module
 from lab.core.config import PipelineConfig, Timeframe
+from lab.platform.synthetic_data import demo_metadata, generate_demo_bars
 from lab.quant.metrics import return_convention, statistical_returns
 from lab.research.experiment import evaluate_saved_predictions, load_candidate_predictions, load_run
 from lab.research.trial_ledger import TrialLedger
@@ -36,8 +37,18 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
         else {"models": {"xgboost": {"enabled": False}}}
     )
     config = PipelineConfig.from_yaml("config/demo.yaml", overrides=overrides).model_dump(mode="json")
-    config["data"]["input_path"] = str(Path("data/demo/ohlcv.csv").resolve())
-    config["data"]["metadata_path"] = str(Path("data/demo/metadata.yaml").resolve())
+    if timeframe == Timeframe.D1:
+        demo_dir = tmp_path / "demo"
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        input_path = demo_dir / "ohlcv.csv"
+        metadata_path = demo_dir / "metadata.yaml"
+        generate_demo_bars(timeframe=Timeframe.D1).write_csv(input_path)
+        metadata_path.write_text(yaml.safe_dump(demo_metadata(timeframe=Timeframe.D1), sort_keys=False))
+        config["data"]["input_path"] = str(input_path)
+        config["data"]["metadata_path"] = str(metadata_path)
+    else:
+        config["data"]["input_path"] = str(Path("data/demo/ohlcv.csv").resolve())
+        config["data"]["metadata_path"] = str(Path("data/demo/metadata.yaml").resolve())
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 
