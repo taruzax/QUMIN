@@ -13,7 +13,7 @@ notebook:
 	uv run jupyter lab notebooks/research_walkthrough.ipynb
 
 dagster:
-	uv run dagster dev -m lab.definitions
+	uv run dagster dev -w config/dagster-workspace.yaml
 
 test:
 	uv run pytest

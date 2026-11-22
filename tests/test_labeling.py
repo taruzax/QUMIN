@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import polars as pl
 
 from lab.core.config import PipelineConfig
-from lab.data.labeling import calculate_volatility, triple_barrier_label
+from lab.quant.labeling import calculate_volatility, triple_barrier_label
 
 
 def _create_synthetic_series(prices: list[float], ticker: str = "AAPL") -> pl.DataFrame:

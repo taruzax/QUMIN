@@ -16,7 +16,7 @@ repos:
 
       - id: mypy
         name: Mypy type check (GitHub Actions)
-        entry: uv run --extra dev mypy -p lab --exclude risk_engine/cla.py
+        entry: uv run --extra dev mypy -p lab
         language: system
         pass_filenames: false
         always_run: true

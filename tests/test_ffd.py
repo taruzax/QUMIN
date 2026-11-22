@@ -6,7 +6,7 @@ from statsmodels.tsa.stattools import adfuller
 import lab.quant.ffd as ffd_module
 
 # pyrefly: ignore [missing-import]
-from lab.data.ffd import (
+from lab.quant.ffd import (
     compute_memory_corr,
     find_global_d,
     find_min_d,

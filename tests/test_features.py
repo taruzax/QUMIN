@@ -8,7 +8,7 @@ import pytest
 from lab.core.schemas import lagged_col, return_col, target_col
 
 # pyrefly: ignore [missing-import]
-from lab.data.features import (
+from lab.quant.features import (
     calculate_dollar_volume,
     calculate_forward_targets,
     calculate_lagged_features,

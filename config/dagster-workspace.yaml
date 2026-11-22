@@ -1,0 +1,5 @@
+load_from:
+  - python_module:
+      module_name: lab.platform.dagster
+      attribute: defs
+      location_name: lab.definitions

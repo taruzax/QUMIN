@@ -146,11 +146,14 @@ uv run qumin --json holdout <run_id> --acknowledge-holdout
 | `report` | `qumin [--json] report [<run_id>] --output <path.html> [--config <pipeline.yaml>] [--decision-id <id>]` | Generates a self-contained HTML diagnostic report and JSON locator metadata. |
 | `report-inspect` | `qumin [--json] report-inspect <report_id> [--store-root artifacts]` | Loads the JSON locator record linking a report checksum to its run and decision. |
 
+The replacement for `run-pipeline` is `uv run qumin prepare --config config/pipeline.yaml`, which writes a dataset bundle and returns its ID. For in-memory preparation, call `lab.research.prepare_dataset(config)` from Python.
+
 ### Makefile Shortcuts (`Makefile`)
+
 - `make demo` — `uv run qumin demo`
 - `make test` — `uv run pytest` (enforces `--cov=src --cov-fail-under=80`)
 - `make notebook` — `uv run jupyter lab notebooks/research_walkthrough.ipynb`
-- `make dagster` — `uv run dagster dev -m lab.definitions` (local Dagster UI on `:3000`)
+- `make dagster` — `uv run dagster dev -w config/dagster-workspace.yaml` (local Dagster UI on `:3000`)
 - `make up` / `make down` — starts/stops optional Docker Compose services (Dagster webserver `:3000`, daemon, and MLflow `:5001`)
 
 ---
