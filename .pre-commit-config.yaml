@@ -2,11 +2,10 @@ repos:
   - repo: local
     hooks:
       - id: ruff-lint
-        name: Ruff lint (GitHub Actions)
-        entry: uv run --extra dev ruff check .
+        name: Ruff lint staged Python and notebook files
+        entry: uv run --extra dev ruff check
         language: system
-        pass_filenames: false
-        always_run: true
+        files: \.(py|ipynb)$
 
       - id: ruff-format
         name: Ruff format staged Python and notebook files
@@ -15,15 +14,16 @@ repos:
         files: \.(py|ipynb)$
 
       - id: mypy
-        name: Mypy type check (GitHub Actions)
+        name: Mypy type check (lab package)
         entry: uv run --extra dev mypy -p lab
         language: system
+        files: ^src/lab/.*\.py$
         pass_filenames: false
-        always_run: true
 
       - id: pytest
-        name: Pytest with coverage (GitHub Actions)
+        name: Pytest with coverage (pre-push)
         entry: uv run --extra dev pytest --cov=src --cov-fail-under=80
         language: system
+        files: ^(src|tests)/.*\.py$
         pass_filenames: false
-        always_run: true
+        stages: [pre-push]
