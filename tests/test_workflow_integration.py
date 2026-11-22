@@ -10,6 +10,7 @@ import lab.platform.dataset_store as dataset_store_module
 import lab.research.experiment as experiment_module
 import lab.research.preprocessing as preprocessing_module
 from lab.core.config import PipelineConfig, Timeframe
+from lab.platform.synthetic_data import demo_metadata, generate_demo_bars
 from lab.quant.metrics import return_convention, statistical_returns
 from lab.research.experiment import evaluate_saved_predictions, load_candidate_predictions, load_run
 from lab.research.trial_ledger import TrialLedger
@@ -36,8 +37,18 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
         else {"models": {"xgboost": {"enabled": False}}}
     )
     config = PipelineConfig.from_yaml("config/demo.yaml", overrides=overrides).model_dump(mode="json")
-    config["data"]["input_path"] = str(Path("data/demo/ohlcv.csv").resolve())
-    config["data"]["metadata_path"] = str(Path("data/demo/metadata.yaml").resolve())
+    if timeframe == Timeframe.D1:
+        demo_dir = tmp_path / "demo"
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        input_path = demo_dir / "ohlcv.csv"
+        metadata_path = demo_dir / "metadata.yaml"
+        generate_demo_bars(timeframe=Timeframe.D1).write_csv(input_path)
+        metadata_path.write_text(yaml.safe_dump(demo_metadata(timeframe=Timeframe.D1), sort_keys=False))
+        config["data"]["input_path"] = str(input_path)
+        config["data"]["metadata_path"] = str(metadata_path)
+    else:
+        config["data"]["input_path"] = str(Path("data/demo/ohlcv.csv").resolve())
+        config["data"]["metadata_path"] = str(Path("data/demo/metadata.yaml").resolve())
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 
@@ -48,9 +59,7 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
 
     output = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines() if "=" in line)
     development_id = output["development_run_id"]
-    holdout_id = output["holdout_run_id"]
     development = load_run(development_id, artifacts_dir=artifacts)
-    holdout = load_run(holdout_id, artifacts_dir=artifacts)
     baseline = next(item for item in development.artifact_manifest["candidates"] if item.get("model") == "baseline")
     candidate_predictions = load_candidate_predictions(development_id, "baseline", artifacts_dir=artifacts)
     saved_variant = evaluate_saved_predictions(
@@ -107,16 +116,19 @@ def test_offline_demo_runs_reload_and_saved_prediction_workflow(tmp_path, monkey
     )
     assert sum(len(frame.keys) for frame in candidate_predictions) == development.artifact_manifest["predicted_coverage"]["total"]
     assert development.snapshot is not None
-    assert holdout.ref.parent_run_id == development_id
-    holdout_selection = next(
-        item["selected_model"] for item in holdout.artifact_manifest["candidates"] if item.get("selected_model")
-    )
-    assert holdout_selection == output["selected_model"]
+    assert "holdout_run_id" not in output
+    assert "holdout_verdict" not in output
     assert saved_variant.ref.parent_run_id == development_id
     assert report.is_file() and report.stat().st_size > 0
     assert locator_path.is_file()
     assert locator["development"]["run_id"] == development_id
-    assert locator["holdout"]["run_id"] == holdout_id
+    assert locator["holdout"] is None
+    assert not list((artifacts / "runs").glob(f"{development_id}-holdout-*"))
+    ledger = TrialLedger(artifacts / "trials.sqlite")
+    try:
+        assert ledger.seal(development.ref.snapshot_hash) is None
+    finally:
+        ledger.connection.close()
     assert output["selected_model"] in {
         item["model"] for item in development.artifact_manifest["candidates"] if item.get("status") == "completed"
     }

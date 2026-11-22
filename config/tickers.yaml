@@ -1,3 +1,386 @@
+# Gold ETFs
+- ticker: GLD
+  name: SPDR Gold Shares
+  aliases: ["GLD", "SPDR Gold", "SPDR Gold Shares"]
+  sector: Materials
+  tier: 1
+  cik: ""
+  instrument_type: etf
+  exchange: "NYSE Arca"
+  benchmark: GLD
+  underlying: "Gold (XAU/USD)"
+  suppliers: []
+  customers: []
+- ticker: IAU
+  name: iShares Gold Trust
+  aliases: ["IAU", "iShares Gold"]
+  sector: Materials
+  tier: 1
+  cik: ""
+  instrument_type: etf
+  exchange: "NYSE Arca"
+  benchmark: GLD
+  underlying: "Gold (XAU/USD)"
+  suppliers: []
+  customers: []
+- ticker: GDX
+  name: VanEck Gold Miners ETF
+  aliases: ["GDX", "VanEck Gold Miners"]
+  sector: Materials
+  tier: 1
+  cik: ""
+  instrument_type: etf
+  exchange: "NYSE Arca"
+  benchmark: GLD
+  underlying: "Gold (XAU/USD)"
+  suppliers: ["NEM", "AEM", "B", "WPM", "FNV", "KGC", "AU", "RGLD"]
+  customers: []
+- ticker: GDXJ
+  name: VanEck Junior Gold Miners ETF
+  aliases: ["GDXJ", "VanEck Junior Gold Miners"]
+  sector: Materials
+  tier: 2
+  cik: ""
+  instrument_type: etf
+  exchange: "NYSE Arca"
+  benchmark: GLD
+  underlying: "Gold (XAU/USD)"
+  suppliers: []
+  customers: []
+- ticker: GLDM
+  name: SPDR Gold MiniShares Trust
+  aliases: ["GLDM", "SPDR Gold MiniShares"]
+  sector: Materials
+  tier: 2
+  cik: ""
+  instrument_type: etf
+  exchange: "NYSE Arca"
+  benchmark: GLD
+  underlying: "Gold (XAU/USD)"
+  suppliers: []
+  customers: []
+# Gold Stocks
+- ticker: NEM
+  name: Newmont Corporation
+  aliases: ["NEM", "Newmont"]
+  sector: Materials
+  tier: 1
+  cik: "0001164727"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: AEM
+  name: Agnico Eagle Mines Limited
+  aliases: ["AEM", "Agnico Eagle"]
+  sector: Materials
+  tier: 1
+  cik: "0000002809"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: B
+  name: Barrick Mining Corporation
+  aliases: ["B", "Barrick", "Barrick Mining", "Barrick Gold"]
+  sector: Materials
+  tier: 1
+  cik: "0000756894"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: WPM
+  name: Wheaton Precious Metals Corp.
+  aliases: ["WPM", "Wheaton Precious Metals", "Wheaton"]
+  sector: Materials
+  tier: 1
+  cik: "0001323404"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: FNV
+  name: Franco-Nevada Corporation
+  aliases: ["FNV", "Franco-Nevada"]
+  sector: Materials
+  tier: 1
+  cik: "0001456346"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: KGC
+  name: Kinross Gold Corporation
+  aliases: ["KGC", "Kinross Gold", "Kinross"]
+  sector: Materials
+  tier: 2
+  cik: "0000701818"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: AU
+  name: AngloGold Ashanti plc
+  aliases: ["AU", "AngloGold Ashanti", "AngloGold"]
+  sector: Materials
+  tier: 2
+  cik: "0001973832"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: GDX
+  suppliers: []
+  customers: []
+- ticker: RGLD
+  name: Royal Gold, Inc.
+  aliases: ["RGLD", "Royal Gold"]
+  sector: Materials
+  tier: 2
+  cik: "0000085535"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: GDX
+  suppliers: []
+  customers: []
+# Top 20 Tech Stocks (+ existing Tech)
+- ticker: NVDA
+  name: NVIDIA Corporation
+  aliases: ["NVDA", "NVIDIA", "Nvidia"]
+  sector: Technology
+  tier: 1
+  cik: "0001045810"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["TSM", "MU"]
+  customers: ["MSFT", "META", "AMZN", "GOOGL", "ORCL"]
+- ticker: AAPL
+  name: Apple Inc.
+  aliases: ["AAPL", "Apple"]
+  sector: Technology
+  tier: 1
+  cik: "0000320193"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["TSM", "AVGO", "QCOM", "MU"]
+  customers: []
+- ticker: MSFT
+  name: Microsoft Corporation
+  aliases: ["MSFT", "Microsoft"]
+  sector: Technology
+  tier: 1
+  cik: "0000789019"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["NVDA", "AMD", "AVGO", "CEG"]
+  customers: []
+- ticker: GOOGL
+  name: Alphabet Inc.
+  aliases: ["GOOGL", "Alphabet", "Google"]
+  sector: Communication Services
+  tier: 1
+  cik: "0001652044"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLC
+  suppliers: ["NVDA", "AVGO", "TSM"]
+  customers: []
+- ticker: AMZN
+  name: Amazon.com, Inc.
+  aliases: ["AMZN", "Amazon", "AWS"]
+  sector: Consumer Discretionary
+  tier: 1
+  cik: "0001018724"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLY
+  suppliers: ["NVDA", "AMD", "AVGO"]
+  customers: []
+- ticker: META
+  name: Meta Platforms, Inc.
+  aliases: ["META", "Meta", "Facebook"]
+  sector: Communication Services
+  tier: 1
+  cik: "0001326801"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLC
+  suppliers: ["NVDA", "AMD", "AVGO"]
+  customers: []
+- ticker: AVGO
+  name: Broadcom Inc.
+  aliases: ["AVGO", "Broadcom"]
+  sector: Technology
+  tier: 1
+  cik: "0001730168"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["TSM"]
+  customers: ["AAPL", "GOOGL", "META", "MSFT", "AMZN"]
+- ticker: TSM
+  name: Taiwan Semiconductor Manufacturing Company Limited
+  aliases: ["TSM", "TSMC", "Taiwan Semiconductor"]
+  sector: Technology
+  tier: 1
+  cik: "0001046179"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: XLK
+  suppliers: ["AMAT", "ACLS"]
+  customers: ["AAPL", "NVDA", "AMD", "AVGO", "QCOM"]
+- ticker: ORCL
+  name: Oracle Corporation
+  aliases: ["ORCL", "Oracle"]
+  sector: Technology
+  tier: 1
+  cik: "0001341439"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: XLK
+  suppliers: ["NVDA", "AMD"]
+  customers: []
+- ticker: CRM
+  name: Salesforce, Inc.
+  aliases: ["CRM", "Salesforce"]
+  sector: Technology
+  tier: 1
+  cik: "0001108524"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: XLK
+  suppliers: ["AMZN", "GOOGL"]
+  customers: []
+- ticker: AMD
+  name: Advanced Micro Devices, Inc.
+  aliases: ["AMD", "Advanced Micro Devices"]
+  sector: Technology
+  tier: 1
+  cik: "0000002488"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["TSM", "MU"]
+  customers: ["MSFT", "META", "AMZN", "ORCL"]
+- ticker: CSCO
+  name: Cisco Systems, Inc.
+  aliases: ["CSCO", "Cisco"]
+  sector: Technology
+  tier: 1
+  cik: "0000858877"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["TSM", "AVGO"]
+  customers: []
+- ticker: IBM
+  name: International Business Machines Corporation
+  aliases: ["IBM", "International Business Machines"]
+  sector: Technology
+  tier: 1
+  cik: "0000051143"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: XLK
+  suppliers: []
+  customers: []
+- ticker: ADBE
+  name: Adobe Inc.
+  aliases: ["ADBE", "Adobe"]
+  sector: Technology
+  tier: 1
+  cik: "0000796343"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["AMZN", "MSFT"]
+  customers: []
+- ticker: NOW
+  name: ServiceNow, Inc.
+  aliases: ["NOW", "ServiceNow"]
+  sector: Technology
+  tier: 1
+  cik: "0001373715"
+  instrument_type: stock
+  exchange: NYSE
+  benchmark: XLK
+  suppliers: ["NVDA"]
+  customers: []
+- ticker: INTU
+  name: Intuit Inc.
+  aliases: ["INTU", "Intuit"]
+  sector: Technology
+  tier: 1
+  cik: "0000896878"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["AMZN"]
+  customers: []
+- ticker: TXN
+  name: Texas Instruments Incorporated
+  aliases: ["TXN", "Texas Instruments"]
+  sector: Technology
+  tier: 1
+  cik: "0000097476"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["AMAT", "ACLS"]
+  customers: []
+- ticker: QCOM
+  name: QUALCOMM Incorporated
+  aliases: ["QCOM", "Qualcomm"]
+  sector: Technology
+  tier: 1
+  cik: "0000804328"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["TSM"]
+  customers: ["AAPL"]
+- ticker: AMAT
+  name: Applied Materials, Inc.
+  aliases: ["AMAT", "Applied Materials"]
+  sector: Technology
+  tier: 1
+  cik: "0000006951"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: []
+  customers: ["TSM", "MU", "TXN"]
+- ticker: MU
+  name: Micron Technology, Inc.
+  aliases: ["MU", "Micron", "Micron Technology"]
+  sector: Technology
+  tier: 1
+  cik: "0000723125"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: ["AMAT", "ACLS"]
+  customers: ["NVDA", "AAPL", "AMD"]
+- ticker: ACLS
+  name: Axcelis Technologies, Inc.
+  aliases: ["ACLS", "Axcelis"]
+  sector: Technology
+  tier: 3
+  cik: "0001113232"
+  instrument_type: stock
+  exchange: NASDAQ
+  benchmark: XLK
+  suppliers: []
+  customers: []
+# Existing Universe (Utilities, Energy, Nuclear, Materials, Consumer & Industrials)
 - ticker: VST
   name: Vistra Corp.
   aliases: ["VST", "Vistra"]
@@ -153,29 +536,6 @@
   exchange: "NYSE Arca"
   benchmark: XLB
   underlying: "Copper"
-  suppliers: []
-  customers: []
-- ticker: GDX
-  name: VanEck Gold Miners ETF
-  aliases: ["GDX", "VanEck Gold Miners"]
-  sector: Materials
-  tier: 3
-  cik: ""
-  instrument_type: etf
-  exchange: "NYSE Arca"
-  benchmark: GLD
-  underlying: "Gold (XAU/USD)"
-  suppliers: []
-  customers: []
-- ticker: ACLS
-  name: Axcelis Technologies, Inc.
-  aliases: ["ACLS", "Axcelis"]
-  sector: Technology
-  tier: 3
-  cik: "0001113232"
-  instrument_type: stock
-  exchange: NASDAQ
-  benchmark: XLK
   suppliers: []
   customers: []
 - ticker: PALL

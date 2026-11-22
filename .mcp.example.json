@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "qumin": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${workspaceFolder}",
+        "run",
+        "python",
+        "-m",
+        "lab.mcp_server"
+      ]
+    }
+  }
+}

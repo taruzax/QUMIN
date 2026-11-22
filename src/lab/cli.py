@@ -22,10 +22,13 @@ from lab.research.experiment import (
     evaluate_holdout,
     evaluate_saved_predictions,
     load_run,
+    preview_holdout,
     run_experiment,
 )
+from lab.research.holdout_gate import HoldoutRejected
 from lab.research.preprocessing import prepare_and_store_dataset
 from lab.research.reporting import generate_run_report
+from lab.research.trial_ledger import TrialLedger
 
 
 def _emit(value: Any, as_json: bool) -> None:
@@ -43,7 +46,7 @@ def _config_option(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Quant ML Lab research workflow")
+    parser = argparse.ArgumentParser(description="Qumin quantitative research workflow")
     parser.add_argument("--json", action="store_true", dest="as_json")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -87,9 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--backtest-config", type=Path)
 
     report = sub.add_parser("report")
-    report.add_argument("run_id")
-    _config_option(report)
+    report.add_argument("run_id", nargs="?")
+    report.add_argument("--config", type=Path)
     report.add_argument("--output", type=Path, required=True)
+    report.add_argument("--decision-id")
     report_inspect = sub.add_parser("report-inspect")
     report_inspect.add_argument("report_id")
     report_inspect.add_argument("--store-root", type=Path, default=get_platform_config().paths.artifacts_dir)
@@ -100,9 +104,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     holdout = sub.add_parser("holdout")
     holdout.add_argument("run_id")
-    holdout.add_argument("--model", required=True)
+    holdout.add_argument("--model")
     holdout.add_argument("--acknowledge-holdout", action="store_true")
-    _config_option(holdout)
+    holdout.add_argument("--config", type=Path)
+    evidence = sub.add_parser("evidence")
+    evidence.add_argument("--run-id", required=True)
+    evidence.add_argument("--model")
+    demo = sub.add_parser("demo")
+    demo.add_argument("--store-root", type=Path, default=Path("artifacts/phase1-demo"))
     return parser
 
 
@@ -129,6 +138,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(args)
     except Exception as exc:
+        if isinstance(exc, HoldoutRejected):
+            pending = exc.decision.get("execution_status") in {"running", "reserved"}
+            if args.as_json:
+                print(json.dumps({"decision": exc.decision, "retryable": pending}, default=str, sort_keys=True))
+            else:
+                print(f"holdout_verdict={exc.decision.get('verdict')}")
+                print(f"holdout_reason={exc.decision.get('evidence', {}).get('reason')}")
+                if pending:
+                    print("holdout_retryable=true")
+            return 1 if pending else 3
         if args.as_json:
             print(json.dumps({"error": {"type": type(exc).__name__, "message": str(exc)}}, sort_keys=True))
         else:
@@ -253,10 +272,45 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "report":
         if args.output.exists():
             raise FileExistsError(f"Report output already exists; choose a new path to preserve prior reports: {args.output}")
-        config = PipelineConfig.from_yaml(args.config)
+        if not args.run_id and not args.decision_id:
+            raise ValueError("report requires a run ID or --decision-id")
+        ledger_path = Path(get_platform_config().paths.artifacts_dir) / "trials.sqlite"
+        persisted_decision = None
+        decision_id = args.decision_id
+        if decision_id:
+            ledger = TrialLedger.read_only(ledger_path)
+            try:
+                persisted_decision = ledger.decision(decision_id)
+            finally:
+                ledger.close()
+            if persisted_decision is None:
+                raise KeyError(f"Unknown holdout decision: {decision_id}")
+            args.run_id = args.run_id or persisted_decision["source_run_id"]
         report_result = load_run(args.run_id)
+        decision_id = decision_id or report_result.artifact_manifest.get("decision_id")
+        if decision_id and persisted_decision is None:
+            ledger = TrialLedger.read_only(ledger_path)
+            try:
+                persisted_decision = ledger.decision(decision_id)
+            finally:
+                ledger.close()
+        if args.config is None:
+            config = PipelineConfig.from_artifact_config(
+                report_result.artifact_manifest["config"],
+                schema_version=report_result.artifact_manifest.get("config_schema_version"),
+                expected_hash=report_result.ref.config_hash,
+            )
+        else:
+            config = PipelineConfig.from_yaml(args.config)
         evidence = campaign_evidence(args.run_id)
-        output = generate_run_report(args.output, result=report_result, config=config, evidence=evidence)
+        output = generate_run_report(
+            args.output,
+            result=report_result,
+            config=config,
+            evidence=evidence,
+            report_type="holdout" if report_result.ref.parent_run_id else "development",
+            gate_decision=persisted_decision,
+        )
         run_dir = Path(get_platform_config().paths.artifacts_dir) / "runs" / args.run_id
         locator = ReportStore(get_platform_config().paths.artifacts_dir).write_locator(
             report_path=output,
@@ -264,6 +318,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             manifest_path=run_dir / "manifest.json",
             evidence=evidence.get("evidence_sidecar"),
             report_type="holdout" if report_result.ref.parent_run_id else "development",
+            decision_id=decision_id,
         )
         _emit(
             {
@@ -305,14 +360,34 @@ def _dispatch(args: argparse.Namespace) -> int:
         parent = load_run(args.run_id)
         if parent.ref.parent_run_id is not None:
             raise ValueError("Holdout requires a completed development run ID")
-        completed = {
-            item["model"] for item in parent.artifact_manifest.get("candidates", []) if item.get("status") == "completed"
-        }
-        if args.model not in completed:
-            raise ValueError(f"Selected model is not a completed candidate in the development run: {args.model}")
-        holdout_result = evaluate_holdout(parent, config=PipelineConfig.from_yaml(args.config), model_name=args.model)
-        _emit(
-            {"run_id": holdout_result.ref.run_id, "parent_run_id": holdout_result.ref.parent_run_id, "model": args.model}, as_json
+        holdout_result = evaluate_holdout(
+            parent,
+            config=PipelineConfig.from_yaml(args.config) if args.config else None,
+            model_name=args.model,
         )
+        _emit(
+            {
+                "run_id": holdout_result.ref.run_id,
+                "parent_run_id": holdout_result.ref.parent_run_id,
+                "model": next(
+                    (
+                        item.get("selected_model")
+                        for item in holdout_result.artifact_manifest.get("candidates", [])
+                        if item.get("selected_model")
+                    ),
+                    None,
+                ),
+                "decision_id": holdout_result.artifact_manifest.get("decision_id"),
+            },
+            as_json,
+        )
+        return 0
+    if args.command == "evidence":
+        _emit(preview_holdout(args.run_id, model_name=args.model), as_json)
+        return 0
+    if args.command == "demo":
+        from lab.demo_phase1 import run_phase1_demo
+
+        _emit(run_phase1_demo(store_root=args.store_root), as_json)
         return 0
     return 2

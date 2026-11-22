@@ -1,0 +1,10 @@
+name: example-campaign
+base_pipeline_config: config/pipeline.yaml
+snapshot_ids: []
+feature_column_sets: []
+model_parameter_overrides: []
+seeds: [42]
+allocation_overrides: []
+backtest_overrides: []
+max_planned_experiments: 16
+worker_count: 2

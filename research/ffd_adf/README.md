@@ -1,6 +1,6 @@
 # FFD — Fractional Feature Data Module
 
-This module is the **data factory** for `quant-ml-lab`. It downloads
+This module is the **data factory** for `qumin`. It downloads
 raw OHLCV market data, engineers financial features using polars, and applies
 **Fractional Differencing (FFD)** to produce stationary, memory-preserving inputs ready for downstream ML models.
 

@@ -47,7 +47,7 @@ class EmpiricalPriorBaseline(BaseModel):
 
     def __init__(self) -> None:
         super().__init__(task="classification")
-        self.prior = np.zeros(3, dtype=np.float64)
+        self.prior: np.ndarray = np.zeros(3, dtype=np.float64)
 
     def fit(
         self,

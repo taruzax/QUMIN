@@ -41,17 +41,33 @@ def _explicit_index(timestamps: tuple[datetime, ...], value: str | datetime, *, 
     return matching[0]
 
 
-def _execution_period(name: str, decision_times: tuple[datetime, ...], bars: pl.DataFrame) -> ExecutionPeriod:
+def _execution_period(
+    name: str,
+    decision_times: tuple[datetime, ...],
+    bars: pl.DataFrame,
+    *,
+    liquidation_limit: datetime | None = None,
+) -> ExecutionPeriod:
     if not decision_times:
         raise ValueError(f"Execution period {name} has no usable decision timestamps")
     last_decision = decision_times[-1]
-    future = bars.filter(pl.col("timestamp") > last_decision).sort("timestamp")
-    if not future.is_empty() and "bar_open_time" in future.columns:
-        liquidation_open = future["bar_open_time"][0]
-    elif "bar_open_time" in bars.columns:
-        liquidation_open = bars.filter(pl.col("timestamp") == last_decision)["bar_open_time"][0]
+    # Bound liquidation to bars inside the period: daily opens precede their
+    # decision timestamps, so the following bar's open may cross the boundary.
+    if liquidation_limit is not None:
+        future = bars.filter(pl.col("timestamp") < liquidation_limit).sort("timestamp")
+        eligible = future.filter(pl.col("timestamp") <= last_decision)
+        if not eligible.is_empty() and "bar_open_time" in eligible.columns:
+            liquidation_open = eligible["bar_open_time"][-1]
+        else:
+            liquidation_open = last_decision
     else:
-        liquidation_open = last_decision
+        future = bars.filter(pl.col("timestamp") > last_decision).sort("timestamp")
+        if not future.is_empty() and "bar_open_time" in future.columns:
+            liquidation_open = future["bar_open_time"][0]
+        elif "bar_open_time" in bars.columns:
+            liquidation_open = bars.filter(pl.col("timestamp") == last_decision)["bar_open_time"][0]
+        else:
+            liquidation_open = last_decision
     return ExecutionPeriod(
         name=name,
         first_decision=decision_times[0],
@@ -120,8 +136,8 @@ def build_split_plan(snapshot: MarketSnapshot | pl.DataFrame, splits_config: Spl
         )
         start += width
 
-    development_period = _execution_period("development", development_times, bars)
-    holdout_period = _execution_period("holdout", holdout_times, bars)
+    development_period = _execution_period("development", development_times, bars, liquidation_limit=holdout_times[0])
+    holdout_period = _execution_period("holdout", holdout_times, bars, liquidation_limit=holdout_end)
     return SplitPlan(
         decision_timestamps=timestamps,
         development_start=development_times[0],

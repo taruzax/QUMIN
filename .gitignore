@@ -4,15 +4,13 @@
 .venv
 __pycache__
 AGENTS.MD
+!AGENTS.md
 log.md
 .env
 .vscode
 /earning_calls_ONHOLD
 /notebooks/*
-!notebooks/research_walkthrough.ipynb
-!notebooks/quant_algorithms_walkthrough.ipynb
-!notebooks/quant_sins_and_corruption_test.ipynb
-!notebooks/orderbook_exploration.ipynb
+
 # local data files
 *.parquet
 *.jsonl
@@ -31,3 +29,4 @@ checkpoints/
 .coverage
 .coverage.*
 coverage.xml
+data

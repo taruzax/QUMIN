@@ -1,9 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import polars as pl
+import pytest
 
-from lab.core.config import PipelineConfig
-from lab.data.labeling import calculate_volatility, triple_barrier_label
+from lab.core.config import PipelineConfig, TaskConfig, Timeframe, TripleBarrierConfig
+from lab.core.contracts import MarketSnapshot
+from lab.quant.labeling import calculate_volatility, compute_labels, triple_barrier_label
 
 
 def _create_synthetic_series(prices: list[float], ticker: str = "AAPL") -> pl.DataFrame:
@@ -100,3 +102,169 @@ def test_barrier_returns_t1():
     t1_list = labeled["t1"].to_list()
     for t0, t1 in zip(t0_list, t1_list):
         assert t1 > t0
+
+
+_BASE_OPEN = datetime(2025, 1, 2, 14, 30, tzinfo=timezone.utc)
+
+
+def _bar_open(idx: int) -> datetime:
+    return _BASE_OPEN + timedelta(days=idx)
+
+
+def _bar_close(idx: int) -> datetime:
+    return _bar_open(idx) + timedelta(hours=6, minutes=30)
+
+
+def _create_compute_labels_snapshot(
+    ticker_bars: dict[str, list[tuple[float, float, float, float]]],
+) -> MarketSnapshot:
+    rows: list[dict[str, object]] = []
+    for ticker, ohlc_list in ticker_bars.items():
+        for idx, (open_px, high_px, low_px, close_px) in enumerate(ohlc_list):
+            opened = _bar_open(idx)
+            closed = _bar_close(idx)
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "bar_open_time": opened,
+                    "bar_close_time": closed,
+                    "timestamp": closed,
+                    "open": open_px,
+                    "high": high_px,
+                    "low": low_px,
+                    "close": close_px,
+                    "volume": 1000.0,
+                }
+            )
+    return MarketSnapshot(
+        snapshot_id="snap-test-labeling",
+        snapshot_hash="hash-test-labeling",
+        bars=pl.DataFrame(rows),
+        ticker_order=tuple(ticker_bars.keys()),
+        calendar="XNYS",
+        timeframe=Timeframe.D1,
+    )
+
+
+def test_compute_labels_triple_barrier_upper_lower_and_expiry():
+    """Verify compute_labels resolves upper, lower, and expiry barriers via close observation and next-open t1."""
+    warmup = [(100.0, 101.0, 99.0, 100.0)] * 3
+    snapshot = _create_compute_labels_snapshot(
+        {
+            "UP": [
+                *warmup,
+                (100.0, 112.0, 99.0, 102.0),  # entry bar: high breaches 105, close does not
+                (102.0, 106.0, 101.0, 105.0),  # trigger bar: close == upper (105.0)
+                (104.0, 105.0, 90.0, 90.0),  # t1 execution open
+                (91.0, 92.0, 90.0, 91.0),  # trailing bar for expiry window
+            ],
+            "DOWN": [
+                *warmup,
+                (100.0, 101.0, 90.0, 98.0),  # entry bar: low breaches 95, close does not
+                (98.0, 99.0, 94.0, 95.0),  # trigger bar: close == lower (95.0)
+                (94.0, 96.0, 93.0, 95.0),  # t1 execution open
+                (96.0, 97.0, 95.0, 96.0),  # trailing bar for expiry window
+            ],
+            "EXPIRY": [
+                *warmup,
+                (100.0, 108.0, 92.0, 104.0),  # high/low breach barriers, close stays inside
+                (104.0, 105.0, 95.0, 96.0),  # close stays inside (95, 105)
+                (96.0, 103.0, 95.5, 101.0),  # expiry bar: no close touch
+                (102.0, 103.0, 101.0, 102.0),  # t1 execution open after expiry
+            ],
+        }
+    )
+    task_config = TaskConfig(
+        kind="classification",
+        triple_barrier=TripleBarrierConfig(
+            profit_taking=1.0,
+            stop_loss=1.0,
+            expiry_bars=3,
+            volatility_span=2,
+            volatility_warmup=2,
+            volatility_floor=0.05,
+        ),
+    )
+
+    result = compute_labels(snapshot, task_config)
+    assert result.target_name == "label"
+
+    rows_by_ticker = {row["ticker"]: row for row in result.labels.to_dicts()}
+    assert set(rows_by_ticker) == {"UP", "DOWN", "EXPIRY"}
+
+    up_row = rows_by_ticker["UP"]
+    assert up_row["label"] == 1
+    assert up_row["target"] == 1
+    assert up_row["volatility"] == pytest.approx(0.05)
+    assert up_row["upper_barrier"] == pytest.approx(105.0)
+    assert up_row["lower_barrier"] == pytest.approx(95.0)
+    assert up_row["decision_time"] == _bar_close(2)
+    assert up_row["entry_time"] == _bar_open(3)
+    assert up_row["event_end"] == _bar_close(4)
+    assert up_row["t1"] == _bar_open(5)
+
+    down_row = rows_by_ticker["DOWN"]
+    assert down_row["label"] == -1
+    assert down_row["target"] == -1
+    assert down_row["upper_barrier"] == pytest.approx(105.0)
+    assert down_row["lower_barrier"] == pytest.approx(95.0)
+    assert down_row["decision_time"] == _bar_close(2)
+    assert down_row["entry_time"] == _bar_open(3)
+    assert down_row["event_end"] == _bar_close(4)
+    assert down_row["t1"] == _bar_open(5)
+
+    expiry_row = rows_by_ticker["EXPIRY"]
+    assert expiry_row["label"] == 0
+    assert expiry_row["target"] == 0
+    assert expiry_row["upper_barrier"] == pytest.approx(105.0)
+    assert expiry_row["lower_barrier"] == pytest.approx(95.0)
+    assert expiry_row["decision_time"] == _bar_close(2)
+    assert expiry_row["entry_time"] == _bar_open(3)
+    assert expiry_row["event_end"] == _bar_close(5)
+    assert expiry_row["t1"] == _bar_open(6)
+
+    exclusions_by_ticker: dict[str, list[str]] = {}
+    for item in result.exclusions.to_dicts():
+        exclusions_by_ticker.setdefault(item["ticker"], []).append(item["reason"])
+    assert exclusions_by_ticker == {
+        "DOWN": ["warmup", "warmup", "tail", "tail", "tail", "tail"],
+        "EXPIRY": ["warmup", "warmup", "tail", "tail", "tail", "tail"],
+        "UP": ["warmup", "warmup", "tail", "tail", "tail", "tail"],
+    }
+
+
+def test_compute_labels_anchors_barriers_on_entry_open_and_resolves_immediate_touch():
+    """Verify barriers anchor at entry open (not decision close) and immediate close touches resolve at next open."""
+    warmup = [(100.0, 101.0, 99.0, 100.0)] * 3
+    snapshot = _create_compute_labels_snapshot(
+        {
+            "GAP_TOUCH": [
+                *warmup,
+                (120.0, 127.0, 119.0, 126.0),  # entry open=120 -> upper=126; immediate touch at close
+                (125.0, 126.0, 124.0, 125.0),  # t1 execution open
+                (125.0, 126.0, 124.0, 125.0),
+                (125.0, 126.0, 124.0, 125.0),
+            ],
+        }
+    )
+    task_config = TaskConfig(
+        kind="classification",
+        triple_barrier=TripleBarrierConfig(
+            profit_taking=1.0,
+            stop_loss=1.0,
+            expiry_bars=3,
+            volatility_span=2,
+            volatility_warmup=2,
+            volatility_floor=0.05,
+        ),
+    )
+
+    result = compute_labels(snapshot, task_config)
+    row = result.labels.to_dicts()[0]
+
+    assert row["label"] == 1
+    assert row["upper_barrier"] == pytest.approx(126.0)
+    assert row["lower_barrier"] == pytest.approx(114.0)
+    assert row["entry_time"] == _bar_open(3)
+    assert row["event_end"] == _bar_close(3)
+    assert row["t1"] == _bar_open(4)

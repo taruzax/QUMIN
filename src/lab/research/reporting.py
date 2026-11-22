@@ -72,7 +72,7 @@ def generate_local_report(
     net_returns: Any,
     gross_returns: Any | None = None,
     timestamps: Any | None = None,
-    title: str = "Quant ML Lab report",
+    title: str = "Qumin report",
     frequency: str = "daily",
     calendar: str = "XNYS",
     summary_html: str | None = None,
@@ -355,7 +355,7 @@ def generate_demo_report(
         "th,td{border:1px solid #ccc;padding:.35rem .6rem;text-align:left;vertical-align:top}"
         "th{background:#f3f3f3}section{border-top:3px solid #555;margin-top:2rem;padding-top:1rem}"
         "code{word-break:break-all}</style>"
-        "<h1>Quant ML Lab offline demo</h1>"
+        "<h1>Qumin offline demo</h1>"
         "<p>This report is generated only from bundled synthetic data and saved local run artifacts. "
         "It is not market-performance evidence.</p>"
         f"<h2>Dataset provenance and timeframe</h2>{_provenance_html(development)}"
@@ -392,7 +392,7 @@ def generate_demo_report(
         net_returns=development.backtest.net_returns.to_numpy(),
         gross_returns=development.backtest.gross_returns.to_numpy() if development.backtest.gross_returns is not None else None,
         timestamps=timestamps,
-        title="Quant ML Lab offline demo",
+        title="Qumin offline demo",
         frequency=config.statistics.frequency,
         calendar=_result_calendar(development, config),
         summary_html=summary_html,
@@ -406,17 +406,36 @@ def generate_run_report(
     config: PipelineConfig,
     evidence: dict[str, Any] | None = None,
     report_type: str = "development",
+    gate_decision: dict[str, Any] | None = None,
 ) -> Path:
     """Generate a standalone report for any verified saved run."""
     if report_type not in {"development", "holdout", "saved-prediction"}:
         raise ValueError(f"Unsupported report type: {report_type}")
+    comparable_sharpes = (gate_decision or {}).get("evidence", {}).get("comparable_sharpes", [])
+    scale = max((abs(row["sharpe"]) for row in comparable_sharpes), default=1.0) or 1.0
+    sharpe_chart = (
+        "<h3>Comparable candidate Sharpes</h3><div role='img' aria-label='Comparable candidate Sharpe chart'>"
+        + "".join(
+            "<p><code>"
+            + html.escape(str(row.get("attempt_id")))
+            + "</code> "
+            + f"<span style='display:inline-block;background:{'#287a55' if row['sharpe'] >= 0 else '#b54d48'};"
+            + f"height:1rem;width:{max(1, abs(row['sharpe']) / scale * 20):.2f}rem'></span> "
+            + html.escape(_format_value(row["sharpe"]))
+            + "</p>"
+            for row in comparable_sharpes
+        )
+        + "</div>"
+        if comparable_sharpes
+        else ""
+    )
     summary_html = (
         "<style>body{font-family:system-ui,sans-serif;line-height:1.4;margin:2rem;max-width:1100px}"
         "table{border-collapse:collapse;margin:0 0 1.5rem;min-width:28rem}"
         "th,td{border:1px solid #ccc;padding:.35rem .6rem;text-align:left;vertical-align:top}"
         "th{background:#f3f3f3}section{border-top:3px solid #555;margin-top:2rem;padding-top:1rem}"
         "code{word-break:break-all}</style>"
-        f"<h1>Quant ML Lab {html.escape(report_type)} report</h1>"
+        f"<h1>Qumin {html.escape(report_type)} report</h1>"
         f"<p>Run ID: <code>{html.escape(result.ref.run_id)}</code>. This report is derived from verified saved artifacts.</p>"
         f"<h2>Source identity</h2><p>Snapshot hash: <code>{html.escape(result.ref.snapshot_hash)}</code>"
         f"<br>Configuration hash: <code>{html.escape(result.ref.config_hash)}</code>"
@@ -425,6 +444,11 @@ def generate_run_report(
         f"<h2>Candidate comparison</h2><pre>{html.escape(_format_value(result.artifact_manifest.get('candidates', [])))}</pre>"
         "<h2>Campaign evidence</h2><pre>"
         f"{html.escape(_format_value(evidence or {'status': 'unavailable', 'reason': 'not requested'}))}</pre>"
+        + (
+            f"<h2>Frozen holdout decision</h2><pre>{html.escape(_format_value(gate_decision))}</pre>{sharpe_chart}"
+            if gate_decision is not None
+            else ""
+        )
         + _run_metadata(
             report_type.title(),
             result,
@@ -446,7 +470,7 @@ def generate_run_report(
         net_returns=result.backtest.net_returns.to_numpy(),
         gross_returns=result.backtest.gross_returns.to_numpy() if result.backtest.gross_returns is not None else None,
         timestamps=timestamps,
-        title=f"Quant ML Lab {report_type} report",
+        title=f"Qumin {report_type} report",
         frequency=config.statistics.frequency,
         calendar=_result_calendar(result, config),
         summary_html=summary_html,
@@ -469,12 +493,13 @@ def write_demo_locator(
     path: str | Path,
     *,
     development: RunResult,
-    holdout: RunResult,
+    holdout: RunResult | None,
     report_path: str | Path,
     selected_model: str,
     artifacts_root: str | Path,
+    decision: dict[str, Any] | None = None,
 ) -> Path:
-    """Write a write-once locator for the two finalized demo runs."""
+    """Write a write-once locator for a development report and optional holdout."""
     output = Path(path)
     report = Path(report_path)
     if not report.exists():
@@ -485,7 +510,9 @@ def write_demo_locator(
         "selected_model": selected_model,
         "report_path": str(report.resolve()),
         "development": _run_locator(development, root),
-        "holdout": _run_locator(holdout, root),
+        "holdout": _run_locator(holdout, root) if holdout is not None else None,
+        "decision": decision,
+        "decision_id": decision.get("decision_id") if decision else None,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():

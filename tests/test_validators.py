@@ -7,15 +7,16 @@ import pytest
 from lab.core.config import PipelineConfig
 
 # pyrefly: ignore [missing-import]
-from lab.data.validators import (
+from lab.quant.validators import (
     DataValidationError,
+    compare_bar_coverage,
     run_all_validations,
+    validate_canonical_bars,
     validate_monotonic_timestamps,
     validate_nulls,
     validate_prices,
     validate_schema,
 )
-from lab.quant.validators import compare_bar_coverage, validate_canonical_bars
 
 
 def test_valid_data_passes(single_ticker_df):

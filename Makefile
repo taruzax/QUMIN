@@ -7,13 +7,13 @@ down:
 	docker compose down
 
 demo:
-	uv run quant-ml-demo
+	uv run qumin demo
 
 notebook:
 	uv run jupyter lab notebooks/research_walkthrough.ipynb
 
 dagster:
-	uv run dagster dev -m lab.definitions
+	uv run dagster dev -w config/dagster-workspace.yaml
 
 test:
 	uv run pytest
@@ -23,19 +23,19 @@ CAMPAIGN ?= config/campaign.example.yaml
 CONFIG ?= config/pipeline.yaml
 
 ingest:
-	uv run quant-ml ingest $(STREAM)
+	uv run qumin ingest $(STREAM)
 
 snapshot-list:
-	uv run quant-ml --json snapshot-list
+	uv run qumin --json snapshot-list
 
 prepare:
-	uv run quant-ml --json prepare --config $(CONFIG)
+	uv run qumin --json prepare --config $(CONFIG)
 
 experiment:
-	uv run quant-ml --json experiment --config $(CONFIG)
+	uv run qumin --json experiment --config $(CONFIG)
 
 campaign-plan:
-	uv run quant-ml --json campaign-plan --campaign $(CAMPAIGN)
+	uv run qumin --json campaign-plan --campaign $(CAMPAIGN)
 
 campaign-run:
-	uv run quant-ml --json campaign-run --campaign $(CAMPAIGN)
+	uv run qumin --json campaign-run --campaign $(CAMPAIGN)

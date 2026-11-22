@@ -26,6 +26,7 @@ class ReportStore:
         manifest_path: str | Path,
         evidence: dict[str, Any] | None = None,
         report_type: str = "development",
+        decision_id: str | None = None,
     ) -> dict[str, Any]:
         path = Path(report_path)
         if not path.exists():
@@ -47,6 +48,7 @@ class ReportStore:
             "source_manifest_checksum": manifest_checksum,
             "evidence": evidence,
             "report_type": report_type,
+            "decision_id": decision_id,
         }
         payload = {
             "schema_version": "report-locator.v1",
@@ -57,6 +59,7 @@ class ReportStore:
             "source_manifest_checksum": manifest_checksum,
             "evidence": evidence,
             "report_type": report_type,
+            "decision_id": decision_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "report_path": str(path.resolve()),
         }
@@ -71,6 +74,7 @@ class ReportStore:
                 "source_manifest_checksum",
                 "evidence",
                 "report_type",
+                "decision_id",
                 "report_path",
             )
             if any(existing.get(field) != payload[field] for field in immutable_fields):
@@ -94,6 +98,7 @@ class ReportStore:
                     "source_manifest_checksum",
                     "evidence",
                     "report_type",
+                    "decision_id",
                     "report_path",
                 )
                 if any(existing.get(field) != payload[field] for field in immutable_fields):

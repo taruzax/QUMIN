@@ -1,0 +1,18 @@
+{
+  "calendar": "XNYS",
+  "dataset": "Phase 1 positive control fixture",
+  "fixture_sha256": "e583be32700f2912dfe8501f9dc5786db38c04b05c58366fc2df10f15a507307",
+  "generator_version": "phase1-positive-control-v1",
+  "parameters": {
+    "n_sessions": 360,
+    "noise_std": 0.003,
+    "signal_return": 0.012
+  },
+  "price_adjustment": "unadjusted",
+  "provenance": "Independent zero-mean innovations; not market-performance evidence.",
+  "seed": 20261109,
+  "target_definition": "signal at decision i predicts open[i+2]/open[i+1]-1",
+  "timeframe": "1d",
+  "timestamp_role": "bar_close",
+  "timezone": "UTC"
+}

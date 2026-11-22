@@ -1,0 +1,19 @@
+{
+  "calendar": "XNYS",
+  "dataset": "Phase 1 null control fixture",
+  "fixture_path": "tests/fixtures/phase1-null-control.csv",
+  "fixture_sha256": "8c47d1df7edc5eed9c327206fde5a883bb938143e621f9464964bfcd2f89d6a4",
+  "generator_version": "phase1-null-control-v1",
+  "parameters": {
+    "close_noise_std": 0.003,
+    "n_sessions": 360,
+    "open_innovation_std": 0.012
+  },
+  "price_adjustment": "unadjusted",
+  "provenance": "Independent zero-mean innovations; not market-performance evidence.",
+  "seed": 20261108,
+  "target_definition": "next-open to following-open simple return",
+  "timeframe": "1d",
+  "timestamp_role": "bar_close",
+  "timezone": "UTC"
+}

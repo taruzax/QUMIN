@@ -9,6 +9,7 @@ from lab.core.config import PipelineConfig
 from lab.core.contracts import CampaignPlan, CampaignRunEntry, ExperimentVariation, MarketSnapshot
 from lab.platform.artifacts import ArtifactStore
 from lab.platform.campaign_store import CampaignStore
+from lab.research.trial_ledger import TrialLedger
 
 
 def _plan():
@@ -43,6 +44,11 @@ def test_campaign_records_independent_results_and_skips_completed_on_resume(tmp_
     calls = []
 
     def execute_one(_config, variation, *_claim):
+        ledger = TrialLedger.read_only(tmp_path / "trials.sqlite")
+        try:
+            assert ledger.connection.execute("SELECT 1 FROM schema_migrations WHERE version=3").fetchone() == (1,)
+        finally:
+            ledger.close()
         calls.append(variation.variation_id)
         if variation.variation_id == "variation-2":
             return {"variation_id": variation.variation_id, "status": "failed", "error": "fixture failure"}
